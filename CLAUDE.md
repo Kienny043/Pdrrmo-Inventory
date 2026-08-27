@@ -101,9 +101,24 @@ Work through these in order, confirming before moving to the next step.
       MANAGERIAL block of 15 then SKILLS block of 12, spec order).
       Wired via `apps.core` in `INSTALLED_APPS` and `path("api/",
       include("apps.core.urls"))`. No models/migrations yet.
-- [ ] 3. Personnel & Training Matrix models + backend CRUD (spec
+- [~] 3. Personnel & Training Matrix models + backend CRUD (spec
       Section 3.3, 4) — front-loaded ahead of the rest of inventory per
-      Section 0's confirmed priority
+      Section 0's confirmed priority. Split into two parts:
+  - [x] **3a. Models + migration** — `Personnel` and `TrainingRecord`
+        in `backend/apps/core/models.py` (+ `choices.py` for the shared
+        `OrgAffiliation` enum, unused `EmploymentStatus` reference enum,
+        and `TRAINING_YEAR_MIN/MAX`), migration `core/0001_initial`.
+        `Personnel.district` is a computed property, not stored;
+        `municipality` is a plain `choices` field off
+        `MUNICIPALITY_CHOICES` (no FK); `employment_status` is a free
+        `CharField` for v1 (spec Section 6 Q#1 still open);
+        `TrainingRecord` has `unique_together (personnel, training_key)`.
+        No `admin.py` (that's Step 8).
+  - [ ] **3b. Backend CRUD** — the `/api/personnel/…` endpoints from
+        spec Section 4 (list/create with `?municipality=`/`?district=`/
+        `?archived=`, detail, soft-archive DELETE, restore,
+        permanent-delete, `PATCH …/training-record/<training_key>/`
+        cell upsert). Not started.
 - [ ] 4. Personnel/matrix frontend (spec Section 5, page 1) — test with
       realistic data across a few districts/municipalities before
       moving on

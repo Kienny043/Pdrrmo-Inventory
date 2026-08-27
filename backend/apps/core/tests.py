@@ -1,10 +1,15 @@
-"""Tests for the reference-data constants and their two read-only endpoints."""
+"""Tests for the reference-data constants, their two read-only endpoints,
+and the Step 3 Personnel / TrainingRecord models."""
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 from . import reference
+from .choices import TRAINING_YEAR_MAX, TRAINING_YEAR_MIN, OrgAffiliation
+from .models import Personnel, TrainingRecord
 
 
 class MunicipalityConstantsTests(TestCase):
@@ -117,3 +122,69 @@ class ReferenceEndpointTests(TestCase):
         anon = APIClient()
         self.assertEqual(anon.get("/api/municipalities/").status_code, 403)
         self.assertEqual(anon.get("/api/training-catalog/").status_code, 403)
+
+
+class PersonnelModelTests(TestCase):
+    def _make(self, **overrides):
+        data = {"name": "Juan Dela Cruz", "municipality": "Tayabas City"}
+        data.update(overrides)
+        return Personnel.objects.create(**data)
+
+    def test_defaults(self):
+        p = self._make()
+        self.assertEqual(p.org_affiliation, OrgAffiliation.EMPLOYEE)
+        self.assertEqual(p.employment_status, "")
+        self.assertEqual(p.designation, "")
+        self.assertFalse(p.is_archived)
+        self.assertIsNone(p.archived_at)
+        self.assertIsNone(p.archived_by)
+        self.assertIsNotNone(p.created_at)
+        self.assertIsNotNone(p.updated_at)
+
+    def test_district_is_computed_not_stored(self):
+        p = self._make(municipality="Tayabas City")
+        self.assertEqual(p.district, reference.FIRST_DISTRICT)
+        self.assertEqual(self._make(municipality="Lucena City").district, reference.SECOND_DISTRICT)
+        self.assertFalse(any(f.name == "district" for f in Personnel._meta.get_fields()))
+
+    def test_municipality_choice_validates(self):
+        with self.assertRaises(ValidationError):
+            self._make(municipality="Nowhere").full_clean()
+
+    def test_employment_status_is_free_text(self):
+        # No DB-level choices (spec Section 6 Q#1 open) — arbitrary value is fine.
+        p = self._make(employment_status="Job Order")
+        p.full_clean()
+        self.assertEqual(p.employment_status, "Job Order")
+
+
+class TrainingRecordModelTests(TestCase):
+    def setUp(self):
+        self.p = Personnel.objects.create(name="Juan Dela Cruz", municipality="Tayabas City")
+
+    def test_links_personnel_to_catalog_key(self):
+        r = TrainingRecord.objects.create(personnel=self.p, training_key="BLS", year_attained=2021)
+        self.assertIn(r.training_key, reference.VALID_TRAINING_KEYS)
+        self.assertEqual(list(self.p.training_records.values_list("training_key", flat=True)), ["BLS"])
+
+    def test_invalid_training_key_fails_full_clean(self):
+        with self.assertRaises(ValidationError):
+            TrainingRecord(personnel=self.p, training_key="NOT_A_KEY", year_attained=2021).full_clean()
+
+    def test_unique_together_personnel_training_key(self):
+        TrainingRecord.objects.create(personnel=self.p, training_key="BLS", year_attained=2021)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                TrainingRecord.objects.create(personnel=self.p, training_key="BLS", year_attained=2023)
+
+    def test_same_key_allowed_for_different_personnel(self):
+        other = Personnel.objects.create(name="Maria Santos", municipality="Lucena City")
+        TrainingRecord.objects.create(personnel=self.p, training_key="BLS", year_attained=2021)
+        TrainingRecord.objects.create(personnel=other, training_key="BLS", year_attained=2021)  # no raise
+
+    def test_year_attained_bounds(self):
+        for bad in (TRAINING_YEAR_MIN - 1, TRAINING_YEAR_MAX + 1):
+            with self.assertRaises(ValidationError):
+                TrainingRecord(personnel=self.p, training_key="SFA", year_attained=bad).full_clean()
+        for ok in (TRAINING_YEAR_MIN, 2020, TRAINING_YEAR_MAX):
+            TrainingRecord(personnel=self.p, training_key="SFA", year_attained=ok).full_clean()  # no raise
