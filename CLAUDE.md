@@ -92,9 +92,15 @@ Work through these in order, confirming before moving to the next step.
 
 - [x] **1. Scaffold the standalone project** — own repo, own venv, own
       `.env`-based settings. Done: commit `11c8a3c` on `main`.
-- [ ] 2. Reference data: municipalities/districts + training catalog as
-      fixed constants (spec Section 1), plus their two read-only
-      endpoints
+- [x] **2. Reference data** — municipalities/districts + 27-item
+      training catalog as fixed constants in `backend/apps/core/
+      reference.py` (spec Section 1), exposed via two read-only,
+      auth-required endpoints: `GET /api/municipalities/` (41 rows,
+      `{name, district}`, ordered First→Fourth district then name) and
+      `GET /api/training-catalog/` (27 rows, `{key, label, group}`,
+      MANAGERIAL block of 15 then SKILLS block of 12, spec order).
+      Wired via `apps.core` in `INSTALLED_APPS` and `path("api/",
+      include("apps.core.urls"))`. No models/migrations yet.
 - [ ] 3. Personnel & Training Matrix models + backend CRUD (spec
       Section 3.3, 4) — front-loaded ahead of the rest of inventory per
       Section 0's confirmed priority
@@ -121,8 +127,10 @@ Work through these in order, confirming before moving to the next step.
 
 ## Current Git State
 
-Single commit: `11c8a3c` "Scaffold standalone Django project" on branch
-`main`. Nothing since. Working tree clean.
+On branch `main`: `11c8a3c` scaffold, then the Step 2 reference-data
+commit. Remote `origin` is
+`https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
+`origin/main`.
 
 ## Notes for Claude Code
 

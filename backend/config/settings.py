@@ -42,7 +42,8 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     # apps.* modules are added here as the build order (spec Section 7)
-    # reaches them — none exist yet at scaffold time.
+    # reaches them.
+    "apps.core",
 ]
 
 # Session auth (+ CSRF) is the real path for the plain-template/vanilla-JS
