@@ -5,7 +5,8 @@ Core data models.
 - UserProfile — role + elevated-delete flag (spec Section 5, Step 3b).
 - Category / Staff / InventoryItem / ItemHolderLog / StockMovement /
   InventoryRequest — inventory core (spec Section 3.1, Step 5a).
-- Section 3.2 training-event models (TrainingSchedule etc.) land in Step 5b.
+- TrainingSchedule / TrainingRegistration / ManualAttendee — training
+  events (spec Section 3.2, Step 5b).
 
 Model definitions only. Behavior that the audit decisions call for — atomic
 stock adjustment (2.1), ItemHolderLog auto-write, approve-deducts-stock
@@ -401,3 +402,149 @@ class InventoryRequest(models.Model):
 
     def __str__(self):
         return f"{self.requested_by} → {self.quantity}× {self.item} [{self.status}]"
+
+
+# ==========================================================================
+# Training events (spec Section 3.2, build Step 5b)
+# ==========================================================================
+# CRUD endpoints are Step 6; admin registration is Step 8. Audit decisions
+# with model impact here: 2.3 (TrainingSchedule gets a real is_archived +
+# archived_at/archived_by, NOT a status=CANCELLED overload), 2.4
+# (matrix_training_key is a choice off the fixed catalog, no TrainingType
+# model), 2.5 (ManualAttendee.org_affiliation reuses the shared
+# choices.OrgAffiliation), 2.6 (TrainingRegistration soft-cancels via a
+# status field, no unique_together). The attendance -> TrainingRecord
+# auto-upsert and the no-duplicate-registration check are Step 6.
+
+
+class TrainingSchedule(models.Model):
+    """A scheduled training event (spec 3.2).
+
+    ``status`` and ``is_archived`` are orthogonal (2.3): ``status`` records
+    what actually happened to the event, archiving is a separate
+    housekeeping/audit action with the usual /archived/, /restore/,
+    /permanent-delete/ shape. When ``matrix_training_key`` is set, marking
+    attendance in Step 6 auto-upserts each attendee's ``TrainingRecord`` for
+    that key at ``date_start.year``; when blank it's just an event record.
+    """
+
+    class Status(models.TextChoices):
+        UPCOMING = "UPCOMING", "Upcoming"
+        ONGOING = "ONGOING", "Ongoing"
+        COMPLETED = "COMPLETED", "Completed"
+        CANCELLED = "CANCELLED", "Cancelled"
+
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    date_start = models.DateField()
+    date_end = models.DateField(null=True, blank=True)
+    time_start = models.TimeField(null=True, blank=True)
+    time_end = models.TimeField(null=True, blank=True)
+    venue = models.CharField(max_length=255, blank=True)
+    target_participants = models.TextField(blank=True)
+    max_slots = models.PositiveIntegerField(null=True, blank=True)
+    registration_deadline = models.DateField(null=True, blank=True)
+    status = models.CharField(
+        max_length=12, choices=Status.choices, default=Status.UPCOMING
+    )
+    # Choice off the Section 1.2 fixed catalog (2.4). Blank = event only, no
+    # matrix effect. Not null=True — Django convention for text fields.
+    matrix_training_key = models.CharField(
+        max_length=TRAINING_KEY_MAX_LENGTH,
+        choices=TRAINING_CATALOG_CHOICES,
+        blank=True,
+    )
+
+    is_archived = models.BooleanField(default=False, db_index=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date_start", "title"]
+
+    def __str__(self):
+        return self.title
+
+
+class TrainingRegistration(models.Model):
+    """A user's registration for a training event (spec 3.2).
+
+    Self-cancellation soft-deletes via ``status`` + ``cancelled_at`` (2.6) —
+    no row is ever hard-deleted, so the audit trail survives. **No**
+    ``unique_together`` on ``(training, user)``: a user may hold a CANCELLED
+    row and later a fresh REGISTERED one. The real invariant ("not currently
+    registered twice") is checked in the Step 6 register endpoint.
+    """
+
+    class Status(models.TextChoices):
+        REGISTERED = "REGISTERED", "Registered"
+        CANCELLED = "CANCELLED", "Cancelled"
+
+    training = models.ForeignKey(
+        TrainingSchedule, on_delete=models.CASCADE, related_name="registrations"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="training_registrations",
+    )
+    status = models.CharField(
+        max_length=12, choices=Status.choices, default=Status.REGISTERED
+    )
+    registered_at = models.DateTimeField(auto_now_add=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    attended = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-registered_at"]
+
+    def __str__(self):
+        return f"{self.user} @ {self.training} [{self.status}]"
+
+
+class ManualAttendee(models.Model):
+    """A walk-in / non-account attendee recorded against a training (spec 3.2).
+
+    ``municipality`` is a plain choice off the Section 1.1 constant, no FK
+    (§1.1). ``org_affiliation`` reuses the shared ``choices.OrgAffiliation``
+    (2.5) — the same class ``Personnel`` uses, not a re-declared enum.
+    """
+
+    training = models.ForeignKey(
+        TrainingSchedule, on_delete=models.CASCADE, related_name="manual_attendees"
+    )
+    name = models.CharField(max_length=255)
+    designation = models.CharField(max_length=255, blank=True)
+    municipality = models.CharField(
+        max_length=MUNICIPALITY_NAME_MAX_LENGTH,
+        choices=MUNICIPALITY_CHOICES,
+    )
+    org_affiliation = models.CharField(
+        max_length=16,
+        choices=OrgAffiliation.choices,
+        default=OrgAffiliation.EMPLOYEE,
+    )
+    attended = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.municipality})"

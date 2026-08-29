@@ -1,6 +1,7 @@
 """Tests for the reference-data constants, their two read-only endpoints,
 the Step 3a Personnel / TrainingRecord models, and the Step 3b CRUD API."""
 
+import datetime
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -10,6 +11,8 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from . import choices as core_choices
+from . import models as core_models
 from . import reference
 from .choices import TRAINING_YEAR_MAX, TRAINING_YEAR_MIN, OrgAffiliation, Role
 from .models import (
@@ -17,10 +20,13 @@ from .models import (
     InventoryItem,
     InventoryRequest,
     ItemHolderLog,
+    ManualAttendee,
     Personnel,
     Staff,
     StockMovement,
     TrainingRecord,
+    TrainingRegistration,
+    TrainingSchedule,
     UserProfile,
     profile_for,
 )
@@ -673,3 +679,160 @@ class InventoryCoreModelTests(TestCase):
         req.refresh_from_db()
         self.assertIsNone(req.decided_by)
         self.assertIsNotNone(req.decided_at)
+
+
+# --------------------------------------------------------------------------
+# Step 5b — Training-event models (spec Section 3.2)
+# --------------------------------------------------------------------------
+
+
+class TrainingScheduleModelTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("sched", password="pw")
+        self.sched = TrainingSchedule.objects.create(
+            title="ICS Level 1 Batch 3",
+            date_start=datetime.date(2026, 6, 1),
+            created_by=self.user,
+        )
+
+    def test_defaults_and_str(self):
+        self.assertEqual(str(self.sched), "ICS Level 1 Batch 3")
+        self.assertEqual(self.sched.status, TrainingSchedule.Status.UPCOMING)
+        self.assertEqual(self.sched.matrix_training_key, "")
+        self.assertFalse(self.sched.is_archived)
+        self.assertIsNone(self.sched.archived_at)
+        self.assertIsNone(self.sched.archived_by)
+        self.assertIsNotNone(self.sched.created_at)
+        self.assertIsNotNone(self.sched.updated_at)
+
+    def test_status_choice_validation(self):
+        self.sched.status = "PENCILLED_IN"
+        with self.assertRaises(ValidationError):
+            self.sched.full_clean()
+
+    def test_status_and_archive_are_orthogonal(self):
+        # 2.3: archiving is not a status=CANCELLED overload.
+        self.sched.status = TrainingSchedule.Status.COMPLETED
+        self.sched.is_archived = True
+        self.sched.archived_at = timezone.now()
+        self.sched.archived_by = self.user
+        self.sched.full_clean()
+        self.sched.save()
+        self.sched.refresh_from_db()
+        self.assertEqual(self.sched.status, TrainingSchedule.Status.COMPLETED)
+        self.assertTrue(self.sched.is_archived)
+        self.assertEqual(self.sched.archived_by, self.user)
+
+    def test_archive_triple_present(self):
+        for name in ("is_archived", "archived_at", "archived_by"):
+            self.assertTrue(
+                any(f.name == name for f in TrainingSchedule._meta.get_fields()), name
+            )
+
+    def test_matrix_training_key_accepts_catalog_key_and_blank(self):
+        self.sched.matrix_training_key = "ICS_L1"
+        self.sched.full_clean()  # valid catalog key
+        self.sched.matrix_training_key = ""
+        self.sched.full_clean()  # blank = event only
+
+    def test_matrix_training_key_rejects_non_catalog_value(self):
+        self.sched.matrix_training_key = "NOT_A_KEY"
+        with self.assertRaises(ValidationError):
+            self.sched.full_clean()
+
+    def test_matrix_training_key_is_not_nullable(self):
+        self.assertFalse(TrainingSchedule._meta.get_field("matrix_training_key").null)
+
+    def test_created_by_set_null_on_user_delete(self):
+        self.user.delete()
+        self.sched.refresh_from_db()
+        self.assertIsNone(self.sched.created_by)
+
+
+class TrainingRegistrationModelTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("reg", password="pw")
+        self.sched = TrainingSchedule.objects.create(
+            title="WASAR", date_start=datetime.date(2026, 7, 1)
+        )
+
+    def test_defaults_and_relationships(self):
+        r = TrainingRegistration.objects.create(training=self.sched, user=self.user)
+        self.assertEqual(r.status, TrainingRegistration.Status.REGISTERED)
+        self.assertIsNone(r.cancelled_at)
+        self.assertFalse(r.attended)
+        self.assertIsNotNone(r.registered_at)
+        self.assertIn(r, self.sched.registrations.all())
+        self.assertIn(r, self.user.training_registrations.all())
+
+    def test_status_choice_validation(self):
+        r = TrainingRegistration(training=self.sched, user=self.user, status="GHOSTED")
+        with self.assertRaises(ValidationError):
+            r.full_clean()
+
+    def test_no_unique_together_on_training_user(self):
+        # 2.6: a CANCELLED row plus a later REGISTERED row for the same pair
+        # must both be allowed at the DB level.
+        self.assertEqual(TrainingRegistration._meta.unique_together, ())
+        TrainingRegistration.objects.create(
+            training=self.sched, user=self.user,
+            status=TrainingRegistration.Status.CANCELLED, cancelled_at=timezone.now(),
+        )
+        TrainingRegistration.objects.create(training=self.sched, user=self.user)  # no raise
+        self.assertEqual(
+            TrainingRegistration.objects.filter(training=self.sched, user=self.user).count(), 2
+        )
+
+    def test_cascade_on_training_delete(self):
+        TrainingRegistration.objects.create(training=self.sched, user=self.user)
+        self.sched.delete()
+        self.assertEqual(TrainingRegistration.objects.count(), 0)
+
+    def test_cascade_on_user_delete(self):
+        TrainingRegistration.objects.create(training=self.sched, user=self.user)
+        self.user.delete()
+        self.assertEqual(TrainingRegistration.objects.count(), 0)
+
+
+class ManualAttendeeModelTests(TestCase):
+    def setUp(self):
+        self.sched = TrainingSchedule.objects.create(
+            title="CBDRRM", date_start=datetime.date(2026, 8, 1)
+        )
+
+    def _make(self, **overrides):
+        data = {"training": self.sched, "name": "Pedro Reyes", "municipality": "Mauban"}
+        data.update(overrides)
+        return ManualAttendee.objects.create(**data)
+
+    def test_defaults_and_relationships(self):
+        a = self._make()
+        self.assertEqual(a.org_affiliation, OrgAffiliation.EMPLOYEE)
+        self.assertFalse(a.attended)
+        self.assertEqual(a.designation, "")
+        self.assertIsNotNone(a.created_at)
+        self.assertIn(a, self.sched.manual_attendees.all())
+
+    def test_municipality_choice_validation(self):
+        with self.assertRaises(ValidationError):
+            self._make(municipality="Atlantis").full_clean()
+
+    def test_org_affiliation_choice_validation(self):
+        with self.assertRaises(ValidationError):
+            self._make(org_affiliation="CONTRACTOR").full_clean()
+
+    def test_org_affiliation_uses_shared_choices_class(self):
+        # 2.5: models.py imports choices.OrgAffiliation — it is the very same
+        # class object, not a re-declared enum that merely looks identical.
+        self.assertIs(core_models.OrgAffiliation, core_choices.OrgAffiliation)
+        self.assertEqual(
+            ManualAttendee._meta.get_field("org_affiliation").choices,
+            core_choices.OrgAffiliation.choices,
+        )
+
+    def test_cascade_on_training_delete(self):
+        self._make()
+        self._make(name="Juana Cruz")
+        self.assertEqual(self.sched.manual_attendees.count(), 2)
+        self.sched.delete()
+        self.assertEqual(ManualAttendee.objects.count(), 0)
