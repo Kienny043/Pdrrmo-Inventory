@@ -139,9 +139,39 @@ Work through these in order, confirming before moving to the next step.
         satisfying the check). `archived_by` serialized as a username
         string. `config/urls.py` unchanged (Step 2's `apps.core.urls`
         include already covers it).
-- [ ] 4. Personnel/matrix frontend (spec Section 5, page 1) — test with
-      realistic data across a few districts/municipalities before
-      moving on
+- [x] **4. Personnel/matrix frontend** (spec Section 5, page 1) — plain
+      Django templates + vanilla JS, no build step.
+      - Page route: `GET /personnel/` (`apps/core/web_urls.py`, included
+        at `/` by `config/urls.py`; `/` redirects to it). View
+        `personnel_matrix_page` is `@login_required` + `@ensure_csrf_cookie`,
+        renders only a shell — all data is fetched client-side from the
+        Step 3b API. Non-admins get an "admin account required" notice
+        instead of the grid.
+      - Templates in `apps/core/templates/` (`core/base.html`,
+        `core/matrix.html`, `registration/login.html`); static in
+        `apps/core/static/core/` (`matrix.css`, `matrix.js`).
+      - Matrix UI: district (required) + municipality (optional) +
+        Active/Archived pickers; two-row header (MANAGERIAL/SKILLS bands
+        over the 27 training columns) with a sticky Name column; all 5
+        identity fields + every training-year cell inline-editable
+        (blur → PATCH); "+ New Personnel" modal; per-row Archive /
+        Restore. Permanent-delete is deliberately NOT here (spec puts it
+        on page 7).
+      - Login: `django.contrib.auth.urls` mounted at `/accounts/`
+        (matches the pre-set `LOGIN_URL`) + a minimal
+        `registration/login.html`. Logout is a POST form in the top bar.
+      - `settings.py`: under `DEBUG`, `STORAGES["staticfiles"]` falls
+        back to plain `StaticFilesStorage` so `{% static %}` works
+        without `collectstatic`.
+      - `apps/core/management/commands/seed_personnel.py` — dev aid
+        (`python manage.py seed_personnel [--flush]`): creates an
+        `admin`/`admin` ADMIN user + 20 Personnel across 6 municipalities
+        / 3 districts, 73 training cells, 2 archived rows. Idempotent.
+        `db.sqlite3` stays gitignored — the command is the source of truth.
+      - Browser-tested (headless Chromium): found and fixed a header bug
+        — `rowspan="2"` identity `<th>`s + `position: sticky` collapsed
+        the MANAGERIAL/SKILLS band row in Chrome; header rebuilt as two
+        full rows, no rowspan.
 - [ ] 5. Remaining core models + migrations (spec Section 3.1, 3.2),
       applying all of Section 2's decisions as they're built (atomic
       stock movements, real `is_archived` on `TrainingSchedule`,
@@ -163,8 +193,9 @@ Work through these in order, confirming before moving to the next step.
 ## Current Git State
 
 On branch `main`: `11c8a3c` scaffold → Step 2 reference-data → Step 3a
-models/migration → Step 3b Personnel CRUD + auth. Steps 1–3 done; Step 4
-(personnel/matrix frontend) is next. Remote `origin` is
+models/migration → Step 3b Personnel CRUD + auth → Step 4 personnel/matrix
+frontend. Steps 1–4 done; Step 5 (remaining core models, spec 3.1/3.2) is
+next. Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 

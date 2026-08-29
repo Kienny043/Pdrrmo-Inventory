@@ -126,6 +126,14 @@ STORAGES = {
     },
 }
 
+# The manifest storage above needs `collectstatic` to have run. For local dev
+# (DEBUG), fall back to plain storage so `{% static %}` resolves straight from
+# each app's static/ dir with no build step.
+if DEBUG:
+    STORAGES["staticfiles"]["BACKEND"] = (
+        "django.contrib.staticfiles.storage.StaticFilesStorage"
+    )
+
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 

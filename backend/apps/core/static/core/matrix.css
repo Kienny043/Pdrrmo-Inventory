@@ -1,0 +1,168 @@
+:root {
+  --line: #cfd4da;
+  --head-bg: #eef1f4;
+  --band-mgr: #dfe9f6;
+  --band-skl: #e6f2e6;
+  --ok: #1a7f37;
+  --err: #c1121f;
+  --danger: #b42318;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #1c1c1c;
+  background: #fff;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: .5rem 1rem;
+  background: #1f2a37;
+  color: #fff;
+}
+.topbar .brand { font-weight: 600; }
+.topbar nav { margin-left: auto; display: flex; align-items: center; gap: 1rem; }
+.topbar nav a { color: #cfe0ff; text-decoration: none; }
+.topbar .who { opacity: .8; }
+.logout-form { margin: 0; }
+.logout-form button,
+.login-box button,
+.toolbar button {
+  font: inherit;
+  padding: .3rem .7rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #f6f7f9;
+  cursor: pointer;
+}
+.toolbar button:disabled { opacity: .5; cursor: not-allowed; }
+
+main { padding: 1rem; }
+
+.notice {
+  padding: .75rem 1rem;
+  border: 1px solid #f0c36d;
+  background: #fdf6e3;
+  border-radius: 6px;
+  max-width: 60ch;
+}
+.notice.error { border-color: #f1a9a0; background: #fdecea; }
+
+.login-box { max-width: 320px; }
+.login-box label { display: block; margin: .5rem 0; }
+.login-box input { width: 100%; padding: .35rem; }
+
+.toolbar {
+  display: flex;
+  align-items: end;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: .75rem;
+}
+.toolbar label { display: flex; flex-direction: column; font-size: 12px; gap: .2rem; }
+.toolbar select { font: inherit; padding: .3rem; min-width: 12rem; }
+
+.status { font-size: 12px; min-height: 1.2em; }
+.status.ok { color: var(--ok); }
+.status.error { color: var(--err); }
+
+.hint { color: #666; }
+
+.grid-wrap { overflow: auto; max-height: 78vh; border: 1px solid var(--line); }
+
+#grid { border-collapse: separate; border-spacing: 0; }
+#grid th, #grid td {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+#grid thead th {
+  position: sticky;
+  background: var(--head-bg);
+  z-index: 2;
+  text-align: left;
+}
+#grid thead tr.band-row th { top: 0; height: 1.7em; padding: 0; }
+#grid thead tr.label-row th { top: 1.7em; vertical-align: bottom; }
+#grid th.band-managerial { background: var(--band-mgr); }
+#grid th.band-skills { background: var(--band-skl); }
+#grid th.corner { background: var(--head-bg); }
+/* label stays pinned just past the frozen Name column while its group is in view */
+#grid .band-label {
+  position: sticky;
+  left: 150px;
+  display: inline-block;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+#grid th.band-managerial .band-label { background: var(--band-mgr); }
+#grid th.band-skills .band-label { background: var(--band-skl); }
+#grid th.train-h {
+  font-weight: 500;
+  font-size: 11px;
+  max-width: 5.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#grid .col-name {
+  position: sticky;
+  left: 0;
+  background: #fff;
+  z-index: 1;
+  border-right: 2px solid var(--line);
+}
+#grid thead .col-name { z-index: 3; background: var(--head-bg); }
+
+#grid td.id-cell input,
+#grid td.id-cell textarea,
+#grid td.id-cell select { font: inherit; border: 1px solid transparent; background: transparent; width: 100%; min-width: 8rem; padding: 1px 3px; }
+#grid td.id-cell input:focus,
+#grid td.id-cell textarea:focus,
+#grid td.id-cell select:focus { border-color: var(--line); background: #fff; outline: none; }
+#grid td.other textarea { min-width: 12rem; resize: vertical; }
+
+#grid td.year-cell { text-align: center; }
+#grid input.year { width: 4.2rem; font: inherit; text-align: center; border: 1px solid transparent; background: transparent; padding: 1px; }
+#grid input.year:focus { border-color: var(--line); background: #fff; outline: none; }
+#grid input.year:not(:placeholder-shown) { background: #f4f9f4; }
+
+.saving { box-shadow: inset 0 0 0 2px #f5c518 !important; }
+.flash-ok { box-shadow: inset 0 0 0 2px var(--ok) !important; }
+.flash-error { box-shadow: inset 0 0 0 2px var(--err) !important; }
+
+#grid td.row-actions { position: sticky; right: 0; background: #fff; }
+#grid td.row-actions button {
+  font: inherit;
+  font-size: 12px;
+  padding: .15rem .5rem;
+  margin: 0 .1rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #f6f7f9;
+  cursor: pointer;
+}
+#grid td.row-actions button.danger { color: var(--danger); border-color: #e5b7b2; }
+
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, .35);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  background: #fff; padding: 1.25rem; border-radius: 8px;
+  width: min(420px, 92vw);
+  display: flex; flex-direction: column; gap: .5rem;
+}
+.modal h2 { margin: 0 0 .25rem; }
+.modal label { display: flex; flex-direction: column; font-size: 12px; gap: .2rem; }
+.modal input, .modal select, .modal textarea { font: inherit; padding: .35rem; }
+.modal-actions { display: flex; gap: .5rem; margin-top: .5rem; }

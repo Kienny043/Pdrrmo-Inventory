@@ -7,14 +7,18 @@ API views for the core app (spec Section 1 / 4).
   ``can_permanently_delete``).
 """
 
+from django.contrib.auth.decorators import login_required
 from django.db import IntegrityError, transaction
+from django.shortcuts import render
 from django.utils import timezone
+from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 
 from . import reference
-from .models import Personnel, TrainingRecord
+from .choices import Role
+from .models import Personnel, TrainingRecord, profile_for
 from .permissions import CanPermanentlyDelete, IsAdmin
 from .serializers import (
     PersonnelSerializer,
@@ -46,6 +50,20 @@ def training_catalog_list(request):
         for key, label, group in reference.training_catalog_rows()
     ]
     return Response(data)
+
+
+@login_required
+@ensure_csrf_cookie
+def personnel_matrix_page(request):
+    """Server-rendered shell for the personnel/training-matrix page (spec Section 5, page 1).
+
+    Renders only the shell + guarantees the CSRF cookie; all data is loaded
+    client-side from the DRF API. Non-admin users get a notice instead of the
+    grid (every /api/personnel/ route is ADMIN-only).
+    """
+    profile = profile_for(request.user)
+    is_admin = request.user.is_superuser or profile.role == Role.ADMIN
+    return render(request, "core/matrix.html", {"is_admin": is_admin})
 
 
 class PersonnelViewSet(viewsets.ModelViewSet):

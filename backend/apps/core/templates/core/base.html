@@ -1,0 +1,28 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Inventory &amp; Training Matrix{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'core/matrix.css' %}">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">Inventory &amp; Training Matrix</span>
+    <nav>
+      {% if user.is_authenticated %}
+        <a href="{% url 'personnel-matrix' %}">Personnel matrix</a>
+        <span class="who">{{ user.username }}</span>
+        <form method="post" action="{% url 'logout' %}" class="logout-form">
+          {% csrf_token %}
+          <button type="submit">Log out</button>
+        </form>
+      {% else %}
+        <a href="{% url 'login' %}">Sign in</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+</body>
+</html>
