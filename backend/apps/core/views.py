@@ -123,6 +123,25 @@ def staff_page(request):
     return render(request, "core/staff.html")
 
 
+@login_required
+@ensure_csrf_cookie
+def equipment_page(request):
+    """Shell for the Equipment dashboard (spec Section 5, page 2).
+
+    STAFF may view the table (read-only) + export CSV; ADMIN also gets
+    add/edit/archive/holder-history. The template gates the buttons on the
+    context processor's ``is_admin``.
+    """
+    return render(request, "core/equipment.html")
+
+
+@login_required
+@ensure_csrf_cookie
+def movements_page(request):
+    """Shell for the Stock movements page (spec Section 5, page 4). ADMIN-only."""
+    return render(request, "core/movements.html")
+
+
 class PersonnelViewSet(viewsets.ModelViewSet):
     """CRUD + archive lifecycle + matrix-cell upsert for Personnel (spec Section 4).
 

@@ -331,8 +331,31 @@ Work through these in order, confirming before moving to the next step.
           create/edit (multipart photo upload); "Remove current photo"
           checkbox on edit → `remove_photo`; per-row Archive. Both
           ADMIN-only (STAFF → notice). No migration.
-  - [ ] **7b. Equipment dashboard + Stock movements** (pages 2, 4).
-        Not started.
+  - [x] **7b. Equipment dashboard + Stock movements** (pages 2, 4).
+        No migration.
+        - **Equipment** (`/equipment/`, `equipment.js`): `.data-table`
+          with name/brand/category/qty/unit/condition/holder/remarks/
+          acquired; client-side category filter + name/brand substring
+          search; **CSV export** via `App.downloadCsv` (columns: name,
+          brand, category, quantity, unit, condition, holder,
+          date_acquired, remarks). ADMIN also gets +New Item and per-row
+          Edit / History / Archive. Add/edit **modal** sends scalars/FKs
+          as JSON, then a follow-up `FormData` PATCH for the image if a
+          file was picked (avoids multipart-null on the nullable holder
+          FK); `quantity` is disabled on edit (serializer strips it).
+          Holder-history **modal** → `GET /api/items/<pk>/holder-history/`
+          newest-first. STAFF: read-only table + CSV only (`#app`
+          `data-can-edit` gates the JS).
+        - **Stock movements** (`/movements/`, `movements.js`):
+          ADMIN-only (STAFF → notice). Inline record-movement form →
+          `POST /api/movements/add/`; on a 400 the `InsufficientStock`
+          message renders in a dedicated `#form-error` line, not a
+          transient flash. Movement log + `?item=` filter dropdown.
+        - `common.css` gained `.record-form` + a bare `.form-error`.
+        - Two click-through bugs found + fixed: `form.elements.item`
+          resolves to the collection's `item()` method, not the control
+          named "item" (switched to `querySelector`); an empty `<tbody>`
+          isn't "visible" to Playwright (assert on `.data-table`).
   - [ ] **7c. Requests + approval flow** (page 5). Not started.
   - [ ] **7d. Training schedules** (page 6) — list + create/edit +
         archive + expandable per-schedule panel (roster + attendance
@@ -357,10 +380,9 @@ Personnel models + CRUD + auth → Step 4 personnel/matrix frontend → Step 5
 remaining core models (`core/0003` inventory + `core/0004` training
 events) → Step 6 full inventory CRUD (6a catalog/custody, 6b stock
 integrity `services.py`, 6c training events + `attendance→TrainingRecord`
-bridge, `core/0005` `Personnel.user`) → Step 7a shared frontend infra
-(`common.js`/`common.css`/`context_processors.py`, role-gated nav) +
-Categories & Staff pages. Steps 1–6 + 7a done; Step 7b (Equipment + Stock
-movements pages) is next. Remote `origin` is
+bridge, `core/0005` `Personnel.user`) → Step 7a shared frontend infra +
+Categories/Staff pages → Step 7b Equipment + Stock movements pages. Steps
+1–6 + 7a + 7b done; Step 7c (Requests page) is next. Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 

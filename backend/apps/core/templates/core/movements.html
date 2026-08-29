@@ -1,0 +1,46 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Stock Movements{% endblock %}
+{% block content %}
+<h1>Stock Movements</h1>
+
+{% if not is_admin %}
+  <div class="notice">
+    This page requires an <strong>admin account</strong>. You're signed in as
+    <strong>{{ user.username }}</strong>. Ask an administrator for access.
+  </div>
+{% else %}
+  <div id="app">
+    <form id="record-form" class="record-form">
+      <label>Item<select name="item" required></select></label>
+      <label>Type
+        <select name="movement_type">
+          <option value="IN">Stock in</option>
+          <option value="OUT">Stock out</option>
+        </select>
+      </label>
+      <label>Quantity<input name="quantity" type="number" min="1" value="1" required></label>
+      <label>Note<input name="note" autocomplete="off"></label>
+      <button type="submit">Record</button>
+      <span id="status" class="status" role="status" aria-live="polite"></span>
+    </form>
+    <div id="form-error" class="form-error"></div>
+
+    <div class="toolbar">
+      <label>Filter by item
+        <select id="f-item"><option value="">All items</option></select>
+      </label>
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr><th>When</th><th>Item</th><th>Type</th><th>Qty</th><th>Note</th><th>By</th></tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <p id="empty" class="hint" hidden>No movements recorded.</p>
+  </div>
+
+  <script src="{% static 'core/movements.js' %}" defer></script>
+{% endif %}
+{% endblock %}

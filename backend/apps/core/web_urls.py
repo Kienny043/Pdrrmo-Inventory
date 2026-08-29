@@ -14,9 +14,9 @@ urlpatterns = [
     path("personnel/", views.personnel_matrix_page, name="personnel-matrix"),
     path("categories/", views.categories_page, name="categories-page"),
     path("staff/", views.staff_page, name="staff-page"),
+    path("equipment/", views.equipment_page, name="equipment-page"),
+    path("movements/", views.movements_page, name="movements-page"),
     # Built in later Step 7 sub-steps:
-    path("equipment/", views.coming_soon_page, name="equipment-page"),
-    path("movements/", views.coming_soon_page, name="movements-page"),
     path("requests/", views.coming_soon_page, name="requests-page"),
     path("trainings/", views.coming_soon_page, name="trainings-page"),
     path("archived/", views.coming_soon_page, name="archived-page"),

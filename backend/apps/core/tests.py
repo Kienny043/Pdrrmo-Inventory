@@ -1744,3 +1744,47 @@ class Step7aPageShellTests(TestCase):
         elevated = make_user("e", role=Role.ADMIN, can_delete=True)
         req.user = elevated
         self.assertEqual(role(req), {"is_admin": True, "can_permanently_delete": True})
+
+
+# --------------------------------------------------------------------------
+# Step 7b — Equipment + Stock movements page shells
+# --------------------------------------------------------------------------
+
+
+class Step7bPageShellTests(TestCase):
+    def setUp(self):
+        from django.test import Client
+
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.staff = make_user("s", role=Role.STAFF)
+        self.ac = Client(); self.ac.force_login(self.admin)
+        self.sc = Client(); self.sc.force_login(self.staff)
+
+    def test_equipment_admin_full_shell(self):
+        r = self.ac.get("/equipment/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'data-can-edit="1"')
+        self.assertContains(r, 'id="btn-add"')
+        self.assertContains(r, 'id="tpl-item-form"')
+
+    def test_equipment_staff_readonly_shell(self):
+        r = self.sc.get("/equipment/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'data-can-edit="0"')
+        self.assertNotContains(r, 'id="btn-add"')
+        self.assertNotContains(r, 'id="tpl-item-form"')
+        self.assertContains(r, 'id="btn-csv"')  # CSV still available to STAFF
+
+    def test_movements_admin_shell_staff_notice(self):
+        r = self.ac.get("/movements/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'id="record-form"')
+        r2 = self.sc.get("/movements/")
+        self.assertEqual(r2.status_code, 200)
+        self.assertNotContains(r2, 'id="record-form"')
+        self.assertContains(r2, "requires an <strong>admin account</strong>")
+
+    def test_nav_links_now_resolve(self):
+        nav = self.ac.get("/equipment/").content.decode().split("<nav>", 1)[1].split("</nav>", 1)[0]
+        self.assertIn('href="/equipment/"', nav)
+        self.assertIn('href="/movements/"', nav)
