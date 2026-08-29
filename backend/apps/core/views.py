@@ -12,8 +12,9 @@ from django.db import IntegrityError, transaction
 from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from . import reference
@@ -21,22 +22,34 @@ from .choices import Role
 from .models import (
     Category,
     InventoryItem,
+    InventoryRequest,
     ItemHolderLog,
     Personnel,
     Staff,
+    StockMovement,
     TrainingRecord,
     profile_for,
 )
-from .permissions import CanPermanentlyDelete, IsAdmin, IsAdminOrReadOnly
+from .permissions import (
+    CanPermanentlyDelete,
+    IsAdmin,
+    IsAdminOrReadOnly,
+    _is_admin,
+)
 from .serializers import (
     CategorySerializer,
     InventoryItemSerializer,
+    InventoryRequestSerializer,
     ItemHolderLogSerializer,
     PersonnelSerializer,
+    RequestDecisionSerializer,
     StaffSerializer,
+    StockMovementSerializer,
+    StockMovementWriteSerializer,
     TrainingRecordCellSerializer,
     TrainingRecordCellWriteSerializer,
 )
+from .services import InsufficientStock, apply_stock_movement
 
 _ARCHIVE_FIELDS = ["is_archived", "archived_at", "archived_by", "updated_at"]
 _ARCHIVED_READ_ONLY = {
@@ -418,3 +431,131 @@ class InventoryItemViewSet(ArchiveLifecycleMixin, viewsets.ModelViewSet):
         item = self.get_object()
         logs = item.holder_logs.select_related("staff", "performed_by").all()
         return Response(ItemHolderLogSerializer(logs, many=True).data)
+
+
+# ==========================================================================
+# Step 6b — stock integrity (spec Section 4, audit decisions 2.1 / 2.12)
+# ==========================================================================
+
+
+class StockMovementViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    """GET /api/movements/ (?item=<id>) and POST /api/movements/add/ — ADMIN only.
+
+    ``add`` calls services.apply_stock_movement directly; InsufficientStock
+    surfaces as 400 with no partial writes (spec 2.1).
+    """
+
+    queryset = StockMovement.objects.select_related("item", "performed_by")
+    serializer_class = StockMovementSerializer
+    permission_classes = [IsAdmin]
+    pagination_class = None
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        item_id = self.request.query_params.get("item")
+        if item_id:
+            qs = qs.filter(item_id=item_id)
+        return qs
+
+    @action(detail=False, methods=["post"], url_path="add")
+    def add(self, request):
+        write = StockMovementWriteSerializer(data=request.data)
+        write.is_valid(raise_exception=True)
+        data = write.validated_data
+        try:
+            movement = apply_stock_movement(
+                data["item"],
+                data["quantity"],
+                data["movement_type"],
+                performed_by=request.user,
+                note=data["note"],
+            )
+        except InsufficientStock as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            StockMovementSerializer(movement).data, status=status.HTTP_201_CREATED
+        )
+
+
+class InventoryRequestViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """GET/POST /api/requests/ and PATCH /api/requests/<pk>/approve/ (spec Section 4).
+
+    STAFF sees and creates only their own requests; ADMIN sees all and decides.
+    Approval deducts stock through the same atomic path as 2.1 (2.12).
+    """
+
+    serializer_class = InventoryRequestSerializer
+    lookup_value_regex = r"\d+"
+    pagination_class = None
+
+    def get_permissions(self):
+        if self.action == "approve":
+            return [IsAdmin()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        qs = InventoryRequest.objects.select_related(
+            "item", "requested_by", "decided_by"
+        )
+        if not _is_admin(self.request.user):
+            qs = qs.filter(requested_by=self.request.user)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(requested_by=self.request.user)
+
+    @action(detail=True, methods=["patch"], url_path="approve")
+    def approve(self, request, pk=None):
+        req = self.get_object()
+        if req.status != InventoryRequest.Status.PENDING:
+            return Response(
+                {
+                    "detail": (
+                        f"Request is already {req.status}; "
+                        "only a pending request can be decided."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        form = RequestDecisionSerializer(data=request.data)
+        form.is_valid(raise_exception=True)
+        decision = form.validated_data["decision"]
+        note = form.validated_data["note"]
+
+        if decision == InventoryRequest.Status.REJECTED:
+            req.status = InventoryRequest.Status.REJECTED
+            req.decided_by = request.user
+            req.decided_at = timezone.now()
+            fields = ["status", "decided_by", "decided_at"]
+            if note:
+                req.note = (req.note + f"\n[Rejected: {note}]").strip()
+                fields.append("note")
+            req.save(update_fields=fields)
+            return Response(self.get_serializer(req).data, status=status.HTTP_200_OK)
+
+        # APPROVED — deduct stock and decide in one transaction (2.12 reuses 2.1).
+        movement_note = f"Request #{req.pk} approved by {request.user.username}"
+        if note:
+            movement_note += f": {note}"
+        try:
+            with transaction.atomic():
+                apply_stock_movement(
+                    req.item,
+                    req.quantity,
+                    StockMovement.MovementType.OUT,
+                    performed_by=request.user,
+                    note=movement_note,
+                )
+                req.status = InventoryRequest.Status.APPROVED
+                req.decided_by = request.user
+                req.decided_at = timezone.now()
+                req.save(update_fields=["status", "decided_by", "decided_at"])
+        except InsufficientStock as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(self.get_serializer(req).data, status=status.HTTP_200_OK)

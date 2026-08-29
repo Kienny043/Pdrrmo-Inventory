@@ -226,12 +226,37 @@ Work through these in order, confirming before moving to the next step.
         `InventoryItem.quantity` stripped in the serializer's `update()`
         (writable on create only); `CategoryViewSet.destroy` → 409 while
         the category still has items. No migration.
-  - [ ] **6b. Stock integrity** — `apps/core/services.py`
-        (`apply_stock_movement` + `InsufficientStock`), `/api/movements/add/`
-        (atomic per 2.1) + `/api/movements/`, `/api/requests/` +
-        `PATCH /api/requests/<pk>/approve/` (`{"decision": …}`,
-        PENDING-only, APPROVED path reuses the same helper per 2.12).
-        Not started.
+  - [x] **6b. Stock integrity** — `apps/core/services.py`:
+        `apply_stock_movement(item, qty, movement_type, *, performed_by,
+        note)` is the **only** path that changes `InventoryItem.quantity`
+        after creation. One atomic attempt (`_apply_stock_movement_once`,
+        `@transaction.atomic`) does: `select_for_update()` on the item
+        (real row-lock on Postgres, no-op on SQLite); OUT insufficiency
+        check *before* any write; quantity moved by a **single
+        conditional `UPDATE … SET quantity = quantity ± n WHERE
+        quantity >= n`** so an OUT can never overdraw on any backend
+        (0 rows touched ⇒ lost a race ⇒ `InsufficientStock`); then the
+        `StockMovement` row. `apply_stock_movement` wraps that in a
+        bounded **retry-on-"database is locked"** loop
+        (`_LOCK_RETRIES=6`, 50 ms×n backoff) — needed because the
+        in-memory shared-cache SQLite test DB raises `SQLITE_LOCKED` on a
+        second concurrent writer instead of waiting; a practical no-op on
+        Postgres (there `select_for_update` blocks rather than erroring),
+        and `InsufficientStock` is never retried. Concurrency proven with
+        real threads + a `Barrier` (`Step6bConcurrencyTests`,
+        `TransactionTestCase`): two OUTs that together overdraw ⇒ exactly
+        one succeeds; two that both fit ⇒ both succeed.
+        Endpoints: `GET /api/movements/` (`?item=`) + `POST
+        /api/movements/add/` (ADMIN; `InsufficientStock`→400, no partial
+        state; archived item→400). `GET/POST /api/requests/` (STAFF sees/
+        creates own only, `requested_by`+`PENDING` set server-side;
+        ADMIN sees all) + `PATCH /api/requests/<pk>/approve/` (ADMIN;
+        `{"decision":"APPROVED"|"REJECTED","note"?}`; PENDING-only→409
+        otherwise; REJECTED sets status/decided_by/decided_at; APPROVED
+        calls the same `apply_stock_movement` (OUT) + decides in one
+        transaction per 2.12, `InsufficientStock`→400 leaves it PENDING;
+        the movement note records `Request #<pk> approved by <user>`).
+        No migration.
   - [ ] **6c. Training events + matrix bridge** — `TrainingScheduleViewSet`
         (reuses `ArchiveLifecycleMixin`) + `register/`/`cancel-registration/`/
         `registrations/`/`my-registrations/`/`attendance/<user_id>/`,
@@ -256,9 +281,10 @@ Work through these in order, confirming before moving to the next step.
 On branch `main`: `11c8a3c` scaffold → Step 2 reference-data → Step 3a/3b
 Personnel models + CRUD + auth → Step 4 personnel/matrix frontend → Step 5
 remaining core models (`core/0003` inventory + `core/0004` training
-events) → Step 6a catalog/custody CRUD. Steps 1–5 + 6a done; Step 6b
-(stock integrity — movements + request approval) is next. Remote `origin`
-is
+events) → Step 6a catalog/custody CRUD → Step 6b stock integrity
+(`services.py`, movements, request approval). Steps 1–5 + 6a + 6b done;
+Step 6c (training-event CRUD + `attendance→TrainingRecord` bridge +
+`Personnel.user` migration `core/0005`) is next. Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 

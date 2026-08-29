@@ -4,15 +4,18 @@ the Step 3a Personnel / TrainingRecord models, and the Step 3b CRUD API."""
 import datetime
 import shutil
 import tempfile
+import threading
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import IntegrityError, transaction
-from django.test import TestCase, override_settings
+from django.db import IntegrityError, connection, transaction
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
+
+from .services import InsufficientStock, apply_stock_movement
 
 from . import choices as core_choices
 from . import models as core_models
@@ -1133,3 +1136,233 @@ class Step6aCategoryAndQuantityTests(TestCase):
         self.assertEqual(r2.status_code, 200)
         self.assertEqual(r2.json()["quantity"], 5)
         self.assertEqual(r2.json()["remarks"], "note")
+
+
+# --------------------------------------------------------------------------
+# Step 6b — stock integrity (movements + request approval)
+# --------------------------------------------------------------------------
+
+
+class Step6bMovementApiTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.staff = make_user("s", role=Role.STAFF)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        self.cat = Category.objects.create(name="C")
+        self.item = InventoryItem.objects.create(category=self.cat, name="Radio", quantity=10)
+
+    def _add(self, **body):
+        return self.c.post("/api/movements/add/", body, format="json")
+
+    def test_in_movement_adjusts_quantity_and_records_row(self):
+        r = self._add(item=self.item.pk, quantity=4, movement_type="IN", note="restock")
+        self.assertEqual(r.status_code, 201)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.quantity, 14)
+        mv = StockMovement.objects.get(pk=r.json()["id"])
+        self.assertEqual((mv.movement_type, mv.quantity, mv.note, mv.performed_by), (
+            "IN", 4, "restock", self.admin
+        ))
+
+    def test_out_movement_adjusts_quantity(self):
+        r = self._add(item=self.item.pk, quantity=3, movement_type="OUT")
+        self.assertEqual(r.status_code, 201)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.quantity, 7)
+
+    def test_insufficient_out_has_zero_side_effects(self):
+        r = self._add(item=self.item.pk, quantity=11, movement_type="OUT")
+        self.assertEqual(r.status_code, 400)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.quantity, 10)  # unchanged
+        self.assertEqual(StockMovement.objects.count(), 0)  # no row written
+
+    def test_movement_on_archived_item_rejected(self):
+        self.item.is_archived = True
+        self.item.save(update_fields=["is_archived"])
+        r = self._add(item=self.item.pk, quantity=1, movement_type="IN")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(StockMovement.objects.count(), 0)
+
+    def test_list_filters_by_item_and_is_admin_only(self):
+        other = InventoryItem.objects.create(category=self.cat, name="Other", quantity=5)
+        self._add(item=self.item.pk, quantity=1, movement_type="IN")
+        self._add(item=other.pk, quantity=2, movement_type="IN")
+        rows = self.c.get(f"/api/movements/?item={self.item.pk}").json()
+        self.assertEqual([x["item"] for x in rows], [self.item.pk])
+        self.assertEqual(len(self.c.get("/api/movements/").json()), 2)
+
+    def test_staff_blocked_from_movements(self):
+        s = APIClient()
+        s.force_authenticate(user=self.staff)
+        self.assertEqual(s.get("/api/movements/").status_code, 403)
+        self.assertEqual(
+            s.post("/api/movements/add/", {"item": self.item.pk, "quantity": 1, "movement_type": "IN"},
+                   format="json").status_code,
+            403,
+        )
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.quantity, 10)
+
+
+class Step6bRequestApiTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.s1 = make_user("s1", role=Role.STAFF)
+        self.s2 = make_user("s2", role=Role.STAFF)
+        self.cat = Category.objects.create(name="C")
+        self.item = InventoryItem.objects.create(category=self.cat, name="Handset", quantity=10)
+
+    def client_for(self, user):
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def test_create_sets_requester_and_pending(self):
+        r = self.client_for(self.s1).post(
+            "/api/requests/", {"item": self.item.pk, "quantity": 3, "note": "field op"}, format="json"
+        )
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["status"], "PENDING")
+        self.assertEqual(r.json()["requested_by"], "s1")
+        req = InventoryRequest.objects.get(pk=r.json()["id"])
+        self.assertEqual(req.requested_by, self.s1)
+
+    def test_staff_sees_only_their_own_admin_sees_all(self):
+        InventoryRequest.objects.create(requested_by=self.s1, item=self.item, quantity=1)
+        InventoryRequest.objects.create(requested_by=self.s2, item=self.item, quantity=2)
+        self.assertEqual(len(self.client_for(self.s1).get("/api/requests/").json()), 1)
+        self.assertEqual(len(self.client_for(self.admin).get("/api/requests/").json()), 2)
+
+    def test_staff_cannot_approve(self):
+        req = InventoryRequest.objects.create(requested_by=self.s1, item=self.item, quantity=1)
+        r = self.client_for(self.s1).patch(
+            f"/api/requests/{req.pk}/approve/", {"decision": "APPROVED"}, format="json"
+        )
+        self.assertEqual(r.status_code, 403)
+
+    def test_reject_sets_fields_without_touching_stock(self):
+        req = InventoryRequest.objects.create(requested_by=self.s1, item=self.item, quantity=4)
+        r = self.client_for(self.admin).patch(
+            f"/api/requests/{req.pk}/approve/", {"decision": "REJECTED", "note": "no budget"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        req.refresh_from_db()
+        self.item.refresh_from_db()
+        self.assertEqual(req.status, "REJECTED")
+        self.assertEqual(req.decided_by, self.admin)
+        self.assertIsNotNone(req.decided_at)
+        self.assertIn("[Rejected: no budget]", req.note)
+        self.assertEqual(self.item.quantity, 10)
+        self.assertEqual(StockMovement.objects.count(), 0)
+
+    def test_approve_deducts_stock_and_writes_movement_with_reason(self):
+        req = InventoryRequest.objects.create(requested_by=self.s1, item=self.item, quantity=4)
+        r = self.client_for(self.admin).patch(
+            f"/api/requests/{req.pk}/approve/", {"decision": "APPROVED"}, format="json"
+        )
+        self.assertEqual(r.status_code, 200)
+        req.refresh_from_db()
+        self.item.refresh_from_db()
+        self.assertEqual(req.status, "APPROVED")
+        self.assertEqual(req.decided_by, self.admin)
+        self.assertEqual(self.item.quantity, 6)
+        mv = StockMovement.objects.get()
+        self.assertEqual((mv.movement_type, mv.quantity, mv.item), ("OUT", 4, self.item))
+        self.assertIn(f"Request #{req.pk} approved by a", mv.note)
+
+    def test_approve_insufficient_stock_leaves_request_pending(self):
+        req = InventoryRequest.objects.create(requested_by=self.s1, item=self.item, quantity=99)
+        r = self.client_for(self.admin).patch(
+            f"/api/requests/{req.pk}/approve/", {"decision": "APPROVED"}, format="json"
+        )
+        self.assertEqual(r.status_code, 400)
+        req.refresh_from_db()
+        self.item.refresh_from_db()
+        self.assertEqual(req.status, "PENDING")
+        self.assertIsNone(req.decided_by)
+        self.assertIsNone(req.decided_at)
+        self.assertEqual(self.item.quantity, 10)
+        self.assertEqual(StockMovement.objects.count(), 0)
+
+    def test_approve_already_decided_is_409_no_double_deduction(self):
+        req = InventoryRequest.objects.create(requested_by=self.s1, item=self.item, quantity=4)
+        admin_c = self.client_for(self.admin)
+        self.assertEqual(
+            admin_c.patch(f"/api/requests/{req.pk}/approve/", {"decision": "APPROVED"}, format="json").status_code,
+            200,
+        )
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.quantity, 6)
+        r2 = admin_c.patch(f"/api/requests/{req.pk}/approve/", {"decision": "APPROVED"}, format="json")
+        self.assertEqual(r2.status_code, 409)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.quantity, 6)  # not deducted twice
+        self.assertEqual(StockMovement.objects.count(), 1)
+
+
+class Step6bServiceTests(TestCase):
+    def setUp(self):
+        self.cat = Category.objects.create(name="C")
+        self.item = InventoryItem.objects.create(category=self.cat, name="Kit", quantity=5)
+
+    def test_out_exact_balance_ok_then_next_fails(self):
+        apply_stock_movement(self.item, 5, StockMovement.MovementType.OUT, performed_by=None)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.quantity, 0)
+        with self.assertRaises(InsufficientStock):
+            apply_stock_movement(self.item, 1, StockMovement.MovementType.OUT, performed_by=None)
+        self.assertEqual(StockMovement.objects.count(), 1)
+
+    def test_insufficient_raises_before_any_write(self):
+        with self.assertRaises(InsufficientStock):
+            apply_stock_movement(self.item, 6, StockMovement.MovementType.OUT, performed_by=None)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.quantity, 5)
+        self.assertEqual(StockMovement.objects.count(), 0)
+
+
+class Step6bConcurrencyTests(TransactionTestCase):
+    """Real threads, not reasoning-in-the-abstract: two OUT movements that
+    together overdraw must not both succeed."""
+
+    def _run_two(self, start_qty, each_out):
+        cat = Category.objects.create(name="C")
+        item = InventoryItem.objects.create(category=cat, name="Shared", quantity=start_qty)
+        barrier = threading.Barrier(2)
+        results = {}
+
+        def worker(tag):
+            barrier.wait()
+            try:
+                apply_stock_movement(item, each_out, StockMovement.MovementType.OUT, performed_by=None)
+                results[tag] = "ok"
+            except InsufficientStock:
+                results[tag] = "insufficient"
+            except Exception as exc:  # surface anything unexpected (e.g. db lock)
+                results[tag] = f"error:{type(exc).__name__}:{exc}"
+            finally:
+                connection.close()
+
+        t1 = threading.Thread(target=worker, args=("t1",))
+        t2 = threading.Thread(target=worker, args=("t2",))
+        t1.start(); t2.start(); t1.join(); t2.join()
+        item.refresh_from_db()
+        return results, item
+
+    def test_racing_out_movements_cannot_overdraw(self):
+        # qty 10, two threads each draw 7 -> plain read-modify-write would let
+        # both write 3 (14 drawn from 10). Correct: exactly one succeeds.
+        results, item = self._run_two(start_qty=10, each_out=7)
+        self.assertEqual(sorted(results.values()), ["insufficient", "ok"], results)
+        self.assertEqual(item.quantity, 3)
+        self.assertEqual(StockMovement.objects.filter(item=item).count(), 1)
+
+    def test_racing_out_movements_that_both_fit_both_succeed(self):
+        # qty 10, two threads each draw 4 -> both fit (10 - 8 = 2).
+        results, item = self._run_two(start_qty=10, each_out=4)
+        self.assertEqual(sorted(results.values()), ["ok", "ok"], results)
+        self.assertEqual(item.quantity, 2)
+        self.assertEqual(StockMovement.objects.filter(item=item).count(), 2)

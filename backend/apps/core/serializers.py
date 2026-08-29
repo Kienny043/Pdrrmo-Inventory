@@ -6,9 +6,11 @@ from .choices import TRAINING_YEAR_MAX, TRAINING_YEAR_MIN
 from .models import (
     Category,
     InventoryItem,
+    InventoryRequest,
     ItemHolderLog,
     Personnel,
     Staff,
+    StockMovement,
     TrainingRecord,
 )
 
@@ -171,3 +173,85 @@ class InventoryItemSerializer(serializers.ModelSerializer):
         # /api/movements/add/ or request approval (spec 2.1 audit trail).
         validated_data.pop("quantity", None)
         return super().update(instance, validated_data)
+
+
+# --------------------------------------------------------------------------
+# Step 6b — stock integrity (StockMovement, InventoryRequest)
+# --------------------------------------------------------------------------
+
+
+class StockMovementSerializer(serializers.ModelSerializer):
+    item_name = serializers.CharField(source="item.name", read_only=True)
+    performed_by = serializers.SlugRelatedField(slug_field="username", read_only=True)
+
+    class Meta:
+        model = StockMovement
+        fields = [
+            "id",
+            "item",
+            "item_name",
+            "quantity",
+            "movement_type",
+            "note",
+            "performed_by",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class StockMovementWriteSerializer(serializers.Serializer):
+    """Body for POST /api/movements/add/."""
+
+    item = serializers.PrimaryKeyRelatedField(queryset=InventoryItem.objects.all())
+    quantity = serializers.IntegerField(min_value=1)
+    movement_type = serializers.ChoiceField(choices=StockMovement.MovementType.choices)
+    note = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_item(self, item):
+        if item.is_archived:
+            raise serializers.ValidationError("Cannot record a movement for an archived item.")
+        return item
+
+
+class InventoryRequestSerializer(serializers.ModelSerializer):
+    requested_by = serializers.SlugRelatedField(slug_field="username", read_only=True)
+    decided_by = serializers.SlugRelatedField(slug_field="username", read_only=True)
+    item_name = serializers.CharField(source="item.name", read_only=True)
+
+    class Meta:
+        model = InventoryRequest
+        fields = [
+            "id",
+            "requested_by",
+            "item",
+            "item_name",
+            "quantity",
+            "status",
+            "note",
+            "decided_by",
+            "decided_at",
+            "created_at",
+        ]
+        read_only_fields = ["status", "decided_by", "decided_at", "created_at"]
+
+    def validate_item(self, item):
+        if item.is_archived:
+            raise serializers.ValidationError("Cannot request an archived item.")
+        return item
+
+    def validate_quantity(self, value):
+        if value < 1:
+            raise serializers.ValidationError("Quantity must be at least 1.")
+        return value
+
+
+class RequestDecisionSerializer(serializers.Serializer):
+    """Body for PATCH /api/requests/<pk>/approve/."""
+
+    decision = serializers.ChoiceField(
+        choices=[
+            InventoryRequest.Status.APPROVED,
+            InventoryRequest.Status.REJECTED,
+        ]
+    )
+    note = serializers.CharField(required=False, allow_blank=True, default="")
