@@ -72,6 +72,19 @@ class Personnel(models.Model):
     name = models.CharField(max_length=255)
     designation = models.CharField(max_length=255, blank=True)
 
+    # Optional link to a login account (spec 2.4 bridge, Step 6c). When a
+    # registered attendee of a training with a matrix_training_key is marked
+    # attended, their TrainingRecord is upserted via this link. Nullable:
+    # spreadsheet-imported personnel have no account; linking is an admin
+    # action (no self-service UI in v1).
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="personnel_profile",
+    )
+
     # C/MDRRMO Employee vs. Volunteer — the rollup axis (spec 2.5).
     org_affiliation = models.CharField(
         max_length=16,

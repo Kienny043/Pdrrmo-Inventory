@@ -1366,3 +1366,307 @@ class Step6bConcurrencyTests(TransactionTestCase):
         self.assertEqual(sorted(results.values()), ["ok", "ok"], results)
         self.assertEqual(item.quantity, 2)
         self.assertEqual(StockMovement.objects.filter(item=item).count(), 2)
+
+
+# --------------------------------------------------------------------------
+# Step 6c — training events + the attendance -> TrainingRecord bridge
+# --------------------------------------------------------------------------
+
+_TS = TrainingSchedule.Status
+_RS = TrainingRegistration.Status
+
+
+def _sched(**overrides):
+    data = {
+        "title": "Batch",
+        "date_start": datetime.date(2026, 6, 1),
+        "status": _TS.UPCOMING,
+    }
+    data.update(overrides)
+    return TrainingSchedule.objects.create(**data)
+
+
+class Step6cTrainingCrudTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.admin_del = make_user("ad", role=Role.ADMIN, can_delete=True)
+        self.staff = make_user("s", role=Role.STAFF)
+        self.t = _sched(title="ICS L1")
+
+    def cli(self, user):
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def test_staff_can_read_active_only_admin_manages(self):
+        s = self.cli(self.staff)
+        self.assertEqual(s.get("/api/trainings/").status_code, 200)
+        self.assertEqual(s.get(f"/api/trainings/{self.t.pk}/").status_code, 200)
+        self.assertEqual(s.post("/api/trainings/", {"title": "x", "date_start": "2026-07-01"}).status_code, 403)
+        self.assertEqual(s.patch(f"/api/trainings/{self.t.pk}/", {"title": "x"}).status_code, 403)
+        self.assertEqual(s.delete(f"/api/trainings/{self.t.pk}/").status_code, 403)
+        self.assertEqual(s.get("/api/trainings/archived/").status_code, 403)
+        # archived training hidden from staff's plain list
+        _sched(title="old", is_archived=True)
+        titles = {r["title"] for r in s.get("/api/trainings/").json()}
+        self.assertEqual(titles, {"ICS L1"})
+
+    def test_admin_create_sets_created_by(self):
+        r = self.cli(self.admin).post(
+            "/api/trainings/", {"title": "New", "date_start": "2026-09-01"}
+        )
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["created_by"], "a")
+
+    def test_archive_lifecycle_and_permanent_delete(self):
+        c = self.cli(self.admin)
+        pk = self.t.pk
+        self.assertEqual(c.delete(f"/api/trainings/{pk}/").status_code, 200)
+        self.t.refresh_from_db()
+        self.assertTrue(self.t.is_archived)
+        self.assertEqual(self.t.archived_by, self.admin)
+        self.assertEqual(c.patch(f"/api/trainings/{pk}/", {"title": "z"}).status_code, 409)
+        self.assertIn(pk, [x["id"] for x in c.get("/api/trainings/archived/").json()])
+        # admin passing ?archived=true on the plain list
+        self.assertIn(pk, [x["id"] for x in c.get("/api/trainings/?archived=true").json()])
+        self.assertEqual(c.post(f"/api/trainings/{pk}/restore/").status_code, 200)
+        # permanent-delete: precondition + elevation
+        cd = self.cli(self.admin_del)
+        self.assertEqual(cd.delete(f"/api/trainings/{pk}/permanent-delete/").status_code, 409)
+        c.delete(f"/api/trainings/{pk}/")
+        self.assertEqual(c.delete(f"/api/trainings/{pk}/permanent-delete/").status_code, 403)
+        self.assertEqual(cd.delete(f"/api/trainings/{pk}/permanent-delete/").status_code, 204)
+
+    def test_matrix_training_label_computed(self):
+        t = _sched(title="M", matrix_training_key="BLS")
+        row = self.cli(self.admin).get(f"/api/trainings/{t.pk}/").json()
+        self.assertEqual(row["matrix_training_label"], "Basic Life Support (BLS)")
+        row2 = self.cli(self.admin).get(f"/api/trainings/{self.t.pk}/").json()
+        self.assertIsNone(row2["matrix_training_label"])
+
+
+class Step6cRegistrationTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.u1 = make_user("u1", role=Role.STAFF)
+        self.u2 = make_user("u2", role=Role.STAFF)
+        self.t = _sched(title="WASAR", status=_TS.UPCOMING)
+
+    def cli(self, user):
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def test_register_happy_path_and_counts(self):
+        r = self.cli(self.u1).post(f"/api/trainings/{self.t.pk}/register/")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["status"], "REGISTERED")
+        row = self.cli(self.admin).get(f"/api/trainings/{self.t.pk}/").json()
+        self.assertEqual(row["registration_count"], 1)
+        mine = self.cli(self.u1).get(f"/api/trainings/{self.t.pk}/").json()
+        self.assertEqual(mine["my_registration_status"], "REGISTERED")
+
+    def test_register_blocked_when_archived(self):
+        self.t.is_archived = True
+        self.t.save(update_fields=["is_archived"])
+        self.assertEqual(self.cli(self.u1).post(f"/api/trainings/{self.t.pk}/register/").status_code, 409)
+
+    def test_register_blocked_by_status(self):
+        for bad in (_TS.COMPLETED, _TS.CANCELLED):
+            self.t.status = bad
+            self.t.save(update_fields=["status"])
+            self.assertEqual(
+                self.cli(self.u1).post(f"/api/trainings/{self.t.pk}/register/").status_code, 409
+            )
+
+    def test_register_blocked_after_deadline(self):
+        self.t.registration_deadline = datetime.date(2000, 1, 1)
+        self.t.save(update_fields=["registration_deadline"])
+        r = self.cli(self.u1).post(f"/api/trainings/{self.t.pk}/register/")
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("deadline", r.json()["detail"].lower())
+
+    def test_register_blocked_when_full(self):
+        self.t.max_slots = 1
+        self.t.save(update_fields=["max_slots"])
+        self.assertEqual(self.cli(self.u1).post(f"/api/trainings/{self.t.pk}/register/").status_code, 201)
+        r = self.cli(self.u2).post(f"/api/trainings/{self.t.pk}/register/")
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("full", r.json()["detail"].lower())
+
+    def test_register_blocked_when_already_registered(self):
+        self.cli(self.u1).post(f"/api/trainings/{self.t.pk}/register/")
+        r = self.cli(self.u1).post(f"/api/trainings/{self.t.pk}/register/")
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("already registered", r.json()["detail"].lower())
+
+    def test_cancel_then_reregister_preserves_history(self):
+        c = self.cli(self.u1)
+        c.post(f"/api/trainings/{self.t.pk}/register/")
+        cancel = c.delete(f"/api/trainings/{self.t.pk}/cancel-registration/")
+        self.assertEqual(cancel.status_code, 200)
+        self.assertEqual(cancel.json()["status"], "CANCELLED")
+        self.assertIsNotNone(cancel.json()["cancelled_at"])
+        # re-register -> a fresh REGISTERED row, old CANCELLED row kept
+        again = c.post(f"/api/trainings/{self.t.pk}/register/")
+        self.assertEqual(again.status_code, 201)
+        rows = TrainingRegistration.objects.filter(training=self.t, user=self.u1)
+        self.assertEqual(sorted(rows.values_list("status", flat=True)), ["CANCELLED", "REGISTERED"])
+
+    def test_cancel_with_no_active_registration_is_404(self):
+        self.assertEqual(
+            self.cli(self.u1).delete(f"/api/trainings/{self.t.pk}/cancel-registration/").status_code, 404
+        )
+
+    def test_registrations_roster_is_admin_only(self):
+        self.cli(self.u1).post(f"/api/trainings/{self.t.pk}/register/")
+        self.assertEqual(self.cli(self.u1).get(f"/api/trainings/{self.t.pk}/registrations/").status_code, 403)
+        roster = self.cli(self.admin).get(f"/api/trainings/{self.t.pk}/registrations/")
+        self.assertEqual(roster.status_code, 200)
+        self.assertEqual([x["user"] for x in roster.json()], ["u1"])
+
+    def test_my_registrations_scoped_to_caller(self):
+        t2 = _sched(title="SWAR")
+        self.cli(self.u1).post(f"/api/trainings/{self.t.pk}/register/")
+        self.cli(self.u1).post(f"/api/trainings/{t2.pk}/register/")
+        self.cli(self.u2).post(f"/api/trainings/{self.t.pk}/register/")
+        mine = self.cli(self.u1).get("/api/trainings/my-registrations/").json()
+        self.assertEqual(len(mine), 2)
+        self.assertEqual({x["user"] for x in mine}, {"u1"})
+
+
+class Step6cAttendanceBridgeTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.u = make_user("trainee", role=Role.STAFF)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        self.t = _sched(
+            title="BLS Batch", date_start=datetime.date(2024, 5, 1),
+            status=_TS.ONGOING, matrix_training_key="BLS",
+        )
+        TrainingRegistration.objects.create(training=self.t, user=self.u)
+
+    def _mark(self, attended):
+        return self.c.patch(
+            f"/api/trainings/{self.t.pk}/attendance/{self.u.pk}/",
+            {"attended": attended}, format="json",
+        )
+
+    def test_attendance_true_with_linked_personnel_upserts_record(self):
+        p = Personnel.objects.create(name="Trainee X", municipality="Lucban", user=self.u)
+        r = self._mark(True)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["attended"])
+        self.assertTrue(r.json()["matrix_updated"])
+        rec = TrainingRecord.objects.get(personnel=p, training_key="BLS")
+        self.assertEqual(rec.year_attained, 2024)
+
+    def test_attendance_true_without_linked_personnel_records_but_no_matrix(self):
+        r = self._mark(True)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["attended"])
+        self.assertFalse(r.json()["matrix_updated"])
+        self.assertIn("no linked Personnel", r.json()["matrix_reason"])
+        self.assertEqual(TrainingRecord.objects.count(), 0)
+
+    def test_attendance_false_does_not_delete_existing_record(self):
+        p = Personnel.objects.create(name="Trainee X", municipality="Lucban", user=self.u)
+        self._mark(True)
+        self.assertEqual(TrainingRecord.objects.filter(personnel=p).count(), 1)
+        r = self._mark(False)
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.json()["attended"])
+        self.assertEqual(TrainingRecord.objects.filter(personnel=p).count(), 1)  # kept
+
+    def test_repeat_attendance_true_does_not_duplicate_record(self):
+        p = Personnel.objects.create(name="Trainee X", municipality="Lucban", user=self.u)
+        self._mark(True)
+        self._mark(True)
+        self.assertEqual(TrainingRecord.objects.filter(personnel=p, training_key="BLS").count(), 1)
+
+    def test_attendance_no_matrix_key_reports_reason(self):
+        self.t.matrix_training_key = ""
+        self.t.save(update_fields=["matrix_training_key"])
+        Personnel.objects.create(name="Trainee X", municipality="Lucban", user=self.u)
+        r = self._mark(True)
+        self.assertFalse(r.json()["matrix_updated"])
+        self.assertIn("no matrix_training_key", r.json()["matrix_reason"])
+        self.assertEqual(TrainingRecord.objects.count(), 0)
+
+    def test_attendance_year_out_of_range_skips_upsert(self):
+        self.t.date_start = datetime.date(1990, 1, 1)
+        self.t.save(update_fields=["date_start"])
+        Personnel.objects.create(name="Trainee X", municipality="Lucban", user=self.u)
+        r = self._mark(True)
+        self.assertFalse(r.json()["matrix_updated"])
+        self.assertIn("outside the matrix range", r.json()["matrix_reason"])
+        self.assertEqual(TrainingRecord.objects.count(), 0)
+
+    def test_attendance_unknown_user_is_404(self):
+        r = self.c.patch(
+            f"/api/trainings/{self.t.pk}/attendance/999999/", {"attended": True}, format="json"
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_attendance_is_admin_only(self):
+        staff_c = APIClient()
+        staff_c.force_authenticate(user=self.u)
+        r = staff_c.patch(
+            f"/api/trainings/{self.t.pk}/attendance/{self.u.pk}/", {"attended": True}, format="json"
+        )
+        self.assertEqual(r.status_code, 403)
+
+
+class Step6cManualAttendeeTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.staff = make_user("s", role=Role.STAFF)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        self.t = _sched(title="CBDRRM")
+
+    def test_crud_and_district_field(self):
+        r = self.c.post(
+            f"/api/trainings/{self.t.pk}/manual-attendees/",
+            {"name": "Pedro", "municipality": "Mauban", "org_affiliation": "VOLUNTEER"},
+        )
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["district"], reference.FIRST_DISTRICT)
+        aid = r.json()["id"]
+        listing = self.c.get(f"/api/trainings/{self.t.pk}/manual-attendees/").json()
+        self.assertEqual([x["name"] for x in listing], ["Pedro"])
+        # hard delete -> 204, and the model has no soft-delete fields
+        self.assertEqual(
+            self.c.delete(f"/api/trainings/{self.t.pk}/manual-attendees/{aid}/").status_code, 204
+        )
+        self.assertFalse(ManualAttendee.objects.filter(pk=aid).exists())
+        self.assertFalse(any(f.name == "is_archived" for f in ManualAttendee._meta.get_fields()))
+
+    def test_attendance_toggle_only_no_matrix(self):
+        a = ManualAttendee.objects.create(training=self.t, name="Ana", municipality="Lucban")
+        r = self.c.patch(
+            f"/api/trainings/{self.t.pk}/manual-attendees/{a.pk}/attendance/",
+            {"attended": True}, format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        a.refresh_from_db()
+        self.assertTrue(a.attended)
+        self.assertEqual(TrainingRecord.objects.count(), 0)  # never upserts
+
+    def test_manual_attendee_routes_are_admin_only(self):
+        s = APIClient()
+        s.force_authenticate(user=self.staff)
+        self.assertEqual(s.get(f"/api/trainings/{self.t.pk}/manual-attendees/").status_code, 403)
+        self.assertEqual(
+            s.post(f"/api/trainings/{self.t.pk}/manual-attendees/", {"name": "X", "municipality": "Lucban"}).status_code,
+            403,
+        )
+
+    def test_attendee_scoped_to_its_training(self):
+        other = _sched(title="Other")
+        a = ManualAttendee.objects.create(training=other, name="Zoe", municipality="Lucban")
+        # wrong training in the path -> 404
+        self.assertEqual(
+            self.c.delete(f"/api/trainings/{self.t.pk}/manual-attendees/{a.pk}/").status_code, 404
+        )

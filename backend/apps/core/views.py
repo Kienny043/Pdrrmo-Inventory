@@ -9,7 +9,7 @@ API views for the core app (spec Section 1 / 4).
 
 from django.contrib.auth.decorators import login_required
 from django.db import IntegrityError, transaction
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import mixins, status, viewsets
@@ -18,16 +18,19 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from . import reference
-from .choices import Role
+from .choices import TRAINING_YEAR_MAX, TRAINING_YEAR_MIN, Role
 from .models import (
     Category,
     InventoryItem,
     InventoryRequest,
     ItemHolderLog,
+    ManualAttendee,
     Personnel,
     Staff,
     StockMovement,
     TrainingRecord,
+    TrainingRegistration,
+    TrainingSchedule,
     profile_for,
 )
 from .permissions import (
@@ -37,10 +40,12 @@ from .permissions import (
     _is_admin,
 )
 from .serializers import (
+    AttendanceSerializer,
     CategorySerializer,
     InventoryItemSerializer,
     InventoryRequestSerializer,
     ItemHolderLogSerializer,
+    ManualAttendeeSerializer,
     PersonnelSerializer,
     RequestDecisionSerializer,
     StaffSerializer,
@@ -48,6 +53,8 @@ from .serializers import (
     StockMovementWriteSerializer,
     TrainingRecordCellSerializer,
     TrainingRecordCellWriteSerializer,
+    TrainingRegistrationSerializer,
+    TrainingScheduleSerializer,
 )
 from .services import InsufficientStock, apply_stock_movement
 
@@ -559,3 +566,209 @@ class InventoryRequestViewSet(
         except InsufficientStock as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(req).data, status=status.HTTP_200_OK)
+
+
+# ==========================================================================
+# Step 6c — training events + the attendance -> TrainingRecord bridge
+# ==========================================================================
+
+
+class TrainingScheduleViewSet(ArchiveLifecycleMixin, viewsets.ModelViewSet):
+    """CRUD + archive lifecycle + registration + attendance (spec Section 4).
+
+    STAFF may GET active trainings and self-register / cancel / view their own
+    registrations; ADMIN manages schedules, the roster, and attendance.
+    """
+
+    serializer_class = TrainingScheduleSerializer
+    lookup_value_regex = r"\d+"
+    pagination_class = None
+    archived_read_only_detail = "This training is archived; restore it before editing."
+
+    _OPEN_STATUSES = (
+        TrainingSchedule.Status.UPCOMING,
+        TrainingSchedule.Status.ONGOING,
+    )
+
+    def get_permissions(self):
+        if self.action == "permanent_delete":
+            return [CanPermanentlyDelete()]
+        if self.action in ("list", "retrieve"):
+            return [IsAdminOrReadOnly()]
+        if self.action in ("register", "cancel_registration", "my_registrations"):
+            return [IsAuthenticated()]
+        return [IsAdmin()]
+
+    def get_queryset(self):
+        qs = TrainingSchedule.objects.select_related("archived_by", "created_by")
+        if self.action == "archived":
+            return qs.filter(is_archived=True)
+        if self.action != "list":
+            return qs
+        archived = (self.request.query_params.get("archived") or "").lower()
+        if _is_admin(self.request.user) and archived in ("true", "1"):
+            return qs.filter(is_archived=True)
+        if _is_admin(self.request.user) and archived == "all":
+            return qs
+        return qs.filter(is_archived=False)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    # --- registration (STAFF self-service) ---------------------------------
+
+    @action(detail=True, methods=["post"])
+    def register(self, request, pk=None):
+        training = self.get_object()
+        if training.is_archived or training.status not in self._OPEN_STATUSES:
+            return Response(
+                {"detail": "Registration is not open for this training."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if (
+            training.registration_deadline
+            and training.registration_deadline < timezone.localdate()
+        ):
+            return Response(
+                {"detail": "The registration deadline has passed."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        active = training.registrations.filter(
+            status=TrainingRegistration.Status.REGISTERED
+        )
+        if training.max_slots is not None and active.count() >= training.max_slots:
+            return Response(
+                {"detail": "This training is full."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if active.filter(user=request.user).exists():
+            return Response(
+                {"detail": "You are already registered for this training."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        reg = TrainingRegistration.objects.create(training=training, user=request.user)
+        return Response(
+            TrainingRegistrationSerializer(reg).data, status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=["delete"], url_path="cancel-registration")
+    def cancel_registration(self, request, pk=None):
+        training = self.get_object()
+        reg = (
+            training.registrations.filter(
+                user=request.user, status=TrainingRegistration.Status.REGISTERED
+            )
+            .order_by("-registered_at")
+            .first()
+        )
+        if reg is None:
+            return Response(
+                {"detail": "You have no active registration for this training."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        reg.status = TrainingRegistration.Status.CANCELLED
+        reg.cancelled_at = timezone.now()
+        reg.save(update_fields=["status", "cancelled_at"])
+        return Response(TrainingRegistrationSerializer(reg).data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="my-registrations")
+    def my_registrations(self, request):
+        qs = TrainingRegistration.objects.select_related("training", "user").filter(
+            user=request.user
+        )
+        return Response(TrainingRegistrationSerializer(qs, many=True).data)
+
+    # --- roster + attendance (ADMIN) -------------------------------------
+
+    @action(detail=True, methods=["get"])
+    def registrations(self, request, pk=None):
+        training = self.get_object()
+        qs = training.registrations.select_related("user", "training").all()
+        return Response(TrainingRegistrationSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=["patch"], url_path=r"attendance/(?P<user_id>\d+)")
+    def attendance(self, request, pk=None, user_id=None):
+        """Toggle a registered user's attendance; upsert their TrainingRecord
+        when the training carries a matrix_training_key (spec 2.4)."""
+        training = self.get_object()
+        reg = (
+            training.registrations.filter(user_id=user_id)
+            .order_by("-registered_at")
+            .first()
+        )
+        if reg is None:
+            return Response(
+                {"detail": "That user has no registration for this training."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        form = AttendanceSerializer(data=request.data)
+        form.is_valid(raise_exception=True)
+        attended = form.validated_data["attended"]
+        reg.attended = attended
+        reg.save(update_fields=["attended"])
+
+        matrix_updated = False
+        matrix_reason = None
+        if attended and training.matrix_training_key:
+            personnel = Personnel.objects.filter(user_id=user_id).first()
+            year = training.date_start.year
+            if personnel is None:
+                matrix_reason = "the attending user has no linked Personnel record"
+            elif not TRAINING_YEAR_MIN <= year <= TRAINING_YEAR_MAX:
+                matrix_reason = f"training year {year} is outside the matrix range"
+            else:
+                TrainingRecord.objects.update_or_create(
+                    personnel=personnel,
+                    training_key=training.matrix_training_key,
+                    defaults={"year_attained": year},
+                )
+                matrix_updated = True
+        elif attended:
+            matrix_reason = "the training has no matrix_training_key"
+
+        data = TrainingRegistrationSerializer(reg).data
+        data["matrix_updated"] = matrix_updated
+        if attended and not matrix_updated:
+            data["matrix_reason"] = matrix_reason
+        return Response(data)
+
+
+class ManualAttendeeViewSet(viewsets.ViewSet):
+    """Nested manual-attendee routes under a training (spec Section 4, 2.8).
+
+    ADMIN only. No soft-delete on this model, so DELETE is a hard delete.
+    Attendance here is a plain toggle — no TrainingRecord upsert (a manual
+    attendee has no linked account).
+    """
+
+    permission_classes = [IsAdmin]
+
+    def _training(self, training_pk):
+        return get_object_or_404(TrainingSchedule, pk=training_pk)
+
+    def _attendee(self, training_pk, pk):
+        return get_object_or_404(ManualAttendee, pk=pk, training_id=training_pk)
+
+    def list(self, request, training_pk=None):
+        self._training(training_pk)
+        qs = ManualAttendee.objects.filter(training_id=training_pk)
+        return Response(ManualAttendeeSerializer(qs, many=True).data)
+
+    def create(self, request, training_pk=None):
+        training = self._training(training_pk)
+        serializer = ManualAttendeeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(training=training)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, training_pk=None, pk=None):
+        self._attendee(training_pk, pk).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def set_attendance(self, request, training_pk=None, pk=None):
+        attendee = self._attendee(training_pk, pk)
+        form = AttendanceSerializer(data=request.data)
+        form.is_valid(raise_exception=True)
+        attendee.attended = form.validated_data["attended"]
+        attendee.save(update_fields=["attended"])
+        return Response(ManualAttendeeSerializer(attendee).data)

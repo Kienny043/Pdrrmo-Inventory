@@ -206,8 +206,21 @@ Work through these in order, confirming before moving to the next step.
         §1.1; `org_affiliation` is the shared `choices.OrgAffiliation`,
         not a re-declared enum, per 2.5). The attendance→`TrainingRecord`
         auto-upsert is Step 6.
-- [~] 6. Backend CRUD for the rest of inventory (spec Section 4). Split
-      into three:
+- [x] **6. Backend CRUD for the rest of inventory** (spec Section 4).
+      Done in three sub-steps. Full route surface now live (all on the
+      `SimpleRouter` in `apps/core/urls.py` unless noted), every write
+      ADMIN unless marked otherwise:
+      `/api/categories/…` · `/api/staff/…` (+`archived/`, `restore/`,
+      `permanent-delete/`) · `/api/items/…` (+`archived/`, `restore/`,
+      `permanent-delete/`, `<pk>/holder-history/`; STAFF may GET active
+      list/detail) · `/api/movements/` + `/api/movements/add/` ·
+      `/api/requests/` (STAFF own-only) + `/api/requests/<pk>/approve/` ·
+      `/api/trainings/…` (+`archived/`, `restore/`, `permanent-delete/`,
+      `<pk>/register/`, `<pk>/cancel-registration/`,
+      `<pk>/registrations/`, `my-registrations/`,
+      `<pk>/attendance/<user_id>/`; STAFF may GET active + self-register/
+      cancel/see own) · `/api/trainings/<tpk>/manual-attendees/…`
+      (explicit nested `path()` entries, ADMIN-only, hard delete).
   - [x] **6a. Catalog + custody CRUD** — `CategoryViewSet`,
         `StaffViewSet`, `InventoryItemViewSet` on the `SimpleRouter` in
         `apps/core/urls.py` (`/api/categories/`, `/api/staff/…`,
@@ -257,13 +270,33 @@ Work through these in order, confirming before moving to the next step.
         transaction per 2.12, `InsufficientStock`→400 leaves it PENDING;
         the movement note records `Request #<pk> approved by <user>`).
         No migration.
-  - [ ] **6c. Training events + matrix bridge** — `TrainingScheduleViewSet`
-        (reuses `ArchiveLifecycleMixin`) + `register/`/`cancel-registration/`/
-        `registrations/`/`my-registrations/`/`attendance/<user_id>/`,
-        nested Manual Attendees (`path()` entries). Adds nullable
-        `Personnel.user` OneToOne (migration `core/0005`) so
-        `attendance/<user_id>/` can upsert a `TrainingRecord` when
-        `matrix_training_key` is set. Not started.
+  - [x] **6c. Training events + matrix bridge** — migration `core/0005`
+        adds nullable `Personnel.user` OneToOne→User (SET_NULL,
+        `related_name="personnel_profile"`); **no API-writable linking
+        endpoint** (spec §4 doesn't call for one — link via admin/shell,
+        or add `user` to `PersonnelSerializer` later).
+        `TrainingScheduleViewSet` reuses `ArchiveLifecycleMixin`; its own
+        `get_queryset` also honours `?archived=true`/`all` on the list
+        for ADMIN. `register/` enforces, in order → 409: not archived +
+        `status` ∈ (UPCOMING, ONGOING); `registration_deadline` not
+        past; `max_slots` not reached (REGISTERED count); no existing
+        REGISTERED row. `cancel-registration/` soft-cancels the caller's
+        REGISTERED row (404 if none) → 200; re-registering makes a fresh
+        REGISTERED row, the CANCELLED one is kept. `registrations/` is
+        the ADMIN roster; `my-registrations/` is the caller's own.
+        `attendance/<user_id>/` (`{"attended": bool}`, ADMIN): toggles
+        the reg's `attended`; when `attended` and
+        `training.matrix_training_key` set, upserts
+        `TrainingRecord(personnel=Personnel.objects.get(user=user_id),
+        training_key, year_attained=date_start.year)` via
+        `update_or_create` — response carries `matrix_updated` and, when
+        false, a `matrix_reason` ("no linked Personnel record" / "year N
+        outside the matrix range" / "no matrix_training_key").
+        `attended: false` never deletes an existing `TrainingRecord`.
+        `ManualAttendeeViewSet` (`viewsets.ViewSet`, ADMIN): nested
+        list/create/destroy(**hard**, 204)/`set_attendance` — attendance
+        here is a plain toggle, never a `TrainingRecord` upsert.
+        `ManualAttendeeSerializer` adds a computed `district`.
 - [ ] 7. Remaining frontend pages (spec Section 5, pages 2–8)
 - [ ] 8. Full `admin.py` registration for every model (spec 2.9) —
       cheap, do it once at the end rather than piecemeal
@@ -281,12 +314,23 @@ Work through these in order, confirming before moving to the next step.
 On branch `main`: `11c8a3c` scaffold → Step 2 reference-data → Step 3a/3b
 Personnel models + CRUD + auth → Step 4 personnel/matrix frontend → Step 5
 remaining core models (`core/0003` inventory + `core/0004` training
-events) → Step 6a catalog/custody CRUD → Step 6b stock integrity
-(`services.py`, movements, request approval). Steps 1–5 + 6a + 6b done;
-Step 6c (training-event CRUD + `attendance→TrainingRecord` bridge +
-`Personnel.user` migration `core/0005`) is next. Remote `origin` is
+events) → Step 6 full inventory CRUD (6a catalog/custody, 6b stock
+integrity `services.py`, 6c training events + `attendance→TrainingRecord`
+bridge, `core/0005` `Personnel.user`). Steps 1–6 done; Step 7 (remaining
+frontend pages, spec §5 pages 2–8) is next. Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
+
+Backend note — stock integrity (`apps/core/services.py`):
+`apply_stock_movement` is the ONLY path that changes
+`InventoryItem.quantity` after creation (so every change writes a
+`StockMovement` audit row). It does `select_for_update()` (real on
+Postgres, no-op on SQLite) + an OUT-insufficiency check before any write
++ a single conditional `UPDATE … WHERE quantity >= n` (0 rows ⇒
+`InsufficientStock`) so overdraw is impossible on any backend, wrapped in
+a bounded retry-on-"database is locked" loop (needed for the in-memory
+SQLite test DB; a no-op on Postgres). Request approval (2.12) calls the
+exact same function.
 
 ## Notes for Claude Code
 

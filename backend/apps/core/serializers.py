@@ -2,16 +2,20 @@
 
 from rest_framework import serializers
 
+from . import reference
 from .choices import TRAINING_YEAR_MAX, TRAINING_YEAR_MIN
 from .models import (
     Category,
     InventoryItem,
     InventoryRequest,
     ItemHolderLog,
+    ManualAttendee,
     Personnel,
     Staff,
     StockMovement,
     TrainingRecord,
+    TrainingRegistration,
+    TrainingSchedule,
 )
 
 
@@ -255,3 +259,123 @@ class RequestDecisionSerializer(serializers.Serializer):
         ]
     )
     note = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+# --------------------------------------------------------------------------
+# Step 6c — training events (TrainingSchedule, TrainingRegistration, ManualAttendee)
+# --------------------------------------------------------------------------
+
+
+class TrainingScheduleSerializer(serializers.ModelSerializer):
+    matrix_training_label = serializers.SerializerMethodField()
+    registration_count = serializers.SerializerMethodField()
+    my_registration_status = serializers.SerializerMethodField()
+    archived_by = serializers.SlugRelatedField(slug_field="username", read_only=True)
+    created_by = serializers.SlugRelatedField(slug_field="username", read_only=True)
+
+    class Meta:
+        model = TrainingSchedule
+        fields = [
+            "id",
+            "title",
+            "description",
+            "date_start",
+            "date_end",
+            "time_start",
+            "time_end",
+            "venue",
+            "target_participants",
+            "max_slots",
+            "registration_deadline",
+            "status",
+            "matrix_training_key",
+            "matrix_training_label",
+            "is_archived",
+            "archived_at",
+            "archived_by",
+            "created_by",
+            "created_at",
+            "updated_at",
+            "registration_count",
+            "my_registration_status",
+        ]
+        read_only_fields = [
+            "is_archived",
+            "archived_at",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_matrix_training_label(self, obj):
+        if not obj.matrix_training_key:
+            return None
+        try:
+            return reference.training_label(obj.matrix_training_key)
+        except KeyError:
+            return None
+
+    def get_registration_count(self, obj):
+        return obj.registrations.filter(
+            status=TrainingRegistration.Status.REGISTERED
+        ).count()
+
+    def get_my_registration_status(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return None
+        reg = (
+            obj.registrations.filter(user=request.user)
+            .order_by("-registered_at")
+            .first()
+        )
+        return reg.status if reg else None
+
+
+class TrainingRegistrationSerializer(serializers.ModelSerializer):
+    user = serializers.SlugRelatedField(slug_field="username", read_only=True)
+    training_title = serializers.CharField(source="training.title", read_only=True)
+
+    class Meta:
+        model = TrainingRegistration
+        fields = [
+            "id",
+            "training",
+            "training_title",
+            "user",
+            "status",
+            "registered_at",
+            "cancelled_at",
+            "attended",
+        ]
+        read_only_fields = fields
+
+
+class ManualAttendeeSerializer(serializers.ModelSerializer):
+    district = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ManualAttendee
+        fields = [
+            "id",
+            "training",
+            "name",
+            "designation",
+            "municipality",
+            "district",
+            "org_affiliation",
+            "attended",
+            "created_at",
+        ]
+        read_only_fields = ["training", "created_at"]
+
+    def get_district(self, obj):
+        try:
+            return reference.district_for(obj.municipality)
+        except KeyError:
+            return None
+
+
+class AttendanceSerializer(serializers.Serializer):
+    """Body for the attendance-toggle endpoints."""
+
+    attended = serializers.BooleanField()
