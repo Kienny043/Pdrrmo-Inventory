@@ -90,10 +90,6 @@ def home_page(request):
     return redirect("personnel-matrix" if _is_admin(request.user) else "equipment-page")
 
 
-@login_required
-def coming_soon_page(request):
-    """Placeholder for pages built in a later Step 7 sub-step."""
-    return render(request, "core/coming_soon.html")
 
 
 @login_required
@@ -164,6 +160,18 @@ def trainings_page(request):
     can_permanently_delete.
     """
     return render(request, "core/trainings.html")
+
+
+@login_required
+@ensure_csrf_cookie
+def archived_page(request):
+    """Shell for the Archived page (spec Section 5, page 7). ADMIN-only.
+
+    Tabbed view over Items / Staff / Trainings / Personnel archived records;
+    Restore for any admin, Permanent-delete only when
+    ``can_permanently_delete`` (the button is hidden, not disabled).
+    """
+    return render(request, "core/archived.html")
 
 
 class PersonnelViewSet(viewsets.ModelViewSet):

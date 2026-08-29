@@ -297,12 +297,14 @@ Work through these in order, confirming before moving to the next step.
         list/create/destroy(**hard**, 204)/`set_attendance` — attendance
         here is a plain toggle, never a `TrainingRecord` upsert.
         `ManualAttendeeSerializer` adds a computed `district`.
-- [~] 7. Remaining frontend pages (spec Section 5, pages 2–8) — plain
-      Django templates + vanilla JS, no build step. Sub-split:
-      **7a** shared infra + Categories + Staff · **7b** Equipment +
-      Stock movements · **7c** Requests · **7d** Training schedules ·
-      **7e** Archived (tabbed). Each its own plan→build→verify (headless
-      Chromium click-through)→commit cycle.
+- [x] **7. Remaining frontend pages** (spec Section 5, pages 2–8) —
+      plain Django templates + vanilla JS, no build step. Done in five
+      sub-steps: **7a** shared infra + Categories + Staff · **7b**
+      Equipment + Stock movements · **7c** Requests · **7d** Training
+      schedules · **7e** Archived (tabbed). All 8 pages live; nav
+      role-gated via `context_processors.role`; shared `common.js` /
+      `common.css` helpers. Each sub-step verified with a headless
+      Chromium click-through.
   - [x] **7a. Shared infra + Categories + Staff.**
         - `static/core/common.js` → `window.App`: `api()` (fetch + CSRF;
           also sends `FormData` as multipart), `el()`, `setStatus(node,…)`,
@@ -399,8 +401,21 @@ Work through these in order, confirming before moving to the next step.
           (`PrimaryKeyRelatedField(source="user")`) — the roster returns
           `user` as a username, but the attendance route keys on the
           numeric id.
-  - [ ] **7e. Archived** (page 7) — tabbed Items/Staff/Trainings/
-        Personnel, restore + conditional permanent-delete. Not started.
+  - [x] **7e. Archived** (page 7). `/archived/`, `archived.js`.
+        ADMIN-only (STAFF → notice, no nav link). No migration.
+        Tabbed **Items / Staff / Trainings / Personnel**, driven by one
+        data-config array (`{url, base, cols}` per tab) — no per-tab
+        logic; every archivable resource shares the `<base>/<id>/restore/`
+        + `<base>/<id>/permanent-delete/` shape. Sources:
+        `GET /api/{items,staff,trainings}/archived/` and
+        `GET /api/personnel/?archived=true`. Per row: **Restore** (all
+        admins); **Delete permanently** rendered **only when
+        `can_permanently_delete`** (button absent, not disabled;
+        `#app data-can-delete` gates the JS). `.tabs` strip added to
+        `common.css`. Cleanup: removed the now-dead `coming_soon_page`
+        view + `coming_soon.html` + the stale placeholder test, replaced
+        by `test_every_nav_route_resolves_to_a_real_page` (all 8 nav
+        routes are real pages). **Step 7 complete.**
 - [ ] 8. Full `admin.py` registration for every model (spec 2.9) —
       cheap, do it once at the end rather than piecemeal
 - [ ] 9. Test end-to-end: personnel matrix across districts, equipment
@@ -419,10 +434,11 @@ Personnel models + CRUD + auth → Step 4 personnel/matrix frontend → Step 5
 remaining core models (`core/0003` inventory + `core/0004` training
 events) → Step 6 full inventory CRUD (6a catalog/custody, 6b stock
 integrity `services.py`, 6c training events + `attendance→TrainingRecord`
-bridge, `core/0005` `Personnel.user`) → Step 7a shared frontend infra +
-Categories/Staff pages → Step 7b Equipment + Stock movements pages. Steps
-1–6 + 7a–7d done; Step 7e (Archived tabbed page) is the last of Step 7.
-Remote `origin` is
+bridge, `core/0005` `Personnel.user`) → Step 7 all frontend pages
+(7a shared infra + Categories/Staff, 7b Equipment + Stock movements,
+7c Requests, 7d Training schedules, 7e Archived). **Steps 1–7 done**;
+Step 8 (full `admin.py` registration, spec 2.9) is next. Migrations:
+`core/0001`–`core/0005`. Test suite: 181 passing. Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 

@@ -1,8 +1,7 @@
 """Server-rendered page routes (mounted at / by config/urls.py).
 
 Kept separate from urls.py (the /api/ router) so the DRF surface and the
-plain-template pages don't share a prefix. Pages not yet built in Step 7
-point at ``coming_soon_page`` so the shared nav can link them all now.
+plain-template pages don't share a prefix.
 """
 
 from django.urls import path
@@ -18,6 +17,5 @@ urlpatterns = [
     path("movements/", views.movements_page, name="movements-page"),
     path("requests/", views.requests_page, name="requests-page"),
     path("trainings/", views.trainings_page, name="trainings-page"),
-    # Built in the last Step 7 sub-step:
-    path("archived/", views.coming_soon_page, name="archived-page"),
+    path("archived/", views.archived_page, name="archived-page"),
 ]

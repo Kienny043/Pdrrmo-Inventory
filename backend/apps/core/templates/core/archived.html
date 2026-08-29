@@ -1,0 +1,25 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Archived{% endblock %}
+{% block content %}
+<h1>Archived Records</h1>
+
+{% if not is_admin %}
+  <div class="notice">
+    This page requires an <strong>admin account</strong>. You're signed in as
+    <strong>{{ user.username }}</strong>. Ask an administrator for access.
+  </div>
+{% else %}
+  <div id="app" data-can-delete="{{ can_permanently_delete|yesno:'1,0' }}">
+    <div class="tabs" id="tabs"></div>
+    <span id="status" class="status" role="status" aria-live="polite"></span>
+    <table class="data-table">
+      <thead id="thead"></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <p id="empty" class="hint" hidden>Nothing archived in this tab.</p>
+  </div>
+
+  <script src="{% static 'core/archived.js' %}" defer></script>
+{% endif %}
+{% endblock %}

@@ -1725,11 +1725,13 @@ class Step7aPageShellTests(TestCase):
         self.assertRedirects(ac.get("/"), "/personnel/", fetch_redirect_response=False)
         self.assertRedirects(sc.get("/"), "/equipment/", fetch_redirect_response=False)
 
-    def test_not_yet_built_pages_render_placeholder(self):
-        # Routes still wired to coming_soon_page. /archived/ -> 7e is the last.
-        r = self._get(self.admin, "/archived/")
-        self.assertEqual(r.status_code, 200)
-        self.assertContains(r, "built in a later Step 7 sub-step")
+    def test_every_nav_route_resolves_to_a_real_page(self):
+        # Step 7 complete: no coming_soon placeholders left.
+        for url in ("/personnel/", "/equipment/", "/staff/", "/movements/",
+                    "/requests/", "/trainings/", "/archived/", "/categories/"):
+            r = self._get(self.admin, url)
+            self.assertEqual(r.status_code, 200, url)
+            self.assertNotContains(r, "built in a later Step 7 sub-step")
 
     def test_context_processor_flags(self):
         from apps.core.context_processors import role
@@ -1873,3 +1875,41 @@ class Step7dTrainingsPageShellTests(TestCase):
         row = c.get(f"/api/trainings/{t.pk}/registrations/").json()[0]
         self.assertEqual(row["user_id"], self.staff.pk)
         self.assertEqual(row["user"], "s")
+
+
+# --------------------------------------------------------------------------
+# Step 7e — Archived tabbed page shell
+# --------------------------------------------------------------------------
+
+
+class Step7eArchivedPageShellTests(TestCase):
+    def setUp(self):
+        from django.test import Client
+
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.staff = make_user("s", role=Role.STAFF)
+        self.ac = Client(); self.ac.force_login(self.admin)
+        self.sc = Client(); self.sc.force_login(self.staff)
+
+    def test_admin_gets_tabbed_shell(self):
+        r = self.ac.get("/archived/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'id="tabs"')
+        self.assertContains(r, 'data-can-delete="0"')  # plain admin
+
+    def test_elevated_admin_shell_flags_delete(self):
+        from django.test import Client
+
+        elevated = make_user("e", role=Role.ADMIN, can_delete=True)
+        c = Client(); c.force_login(elevated)
+        self.assertContains(c.get("/archived/"), 'data-can-delete="1"')
+
+    def test_staff_gets_notice_no_tabs(self):
+        r = self.sc.get("/archived/")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, 'id="tabs"')
+        self.assertContains(r, "requires an <strong>admin account</strong>")
+
+    def test_nav_link_resolves(self):
+        nav = self.ac.get("/archived/").content.decode().split("<nav>", 1)[1].split("</nav>", 1)[0]
+        self.assertIn('href="/archived/"', nav)
