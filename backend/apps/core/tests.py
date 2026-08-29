@@ -1670,3 +1670,77 @@ class Step6cManualAttendeeTests(TestCase):
         self.assertEqual(
             self.c.delete(f"/api/trainings/{self.t.pk}/manual-attendees/{a.pk}/").status_code, 404
         )
+
+
+# --------------------------------------------------------------------------
+# Step 7a — shared infra + Categories / Staff page shells
+# --------------------------------------------------------------------------
+
+
+class Step7aPageShellTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.staff = make_user("s", role=Role.STAFF)
+
+    def _get(self, user, url):
+        from django.test import Client
+
+        c = Client()
+        c.force_login(user)
+        return c.get(url)
+
+    def test_admin_gets_page_shells(self):
+        for url in ("/personnel/", "/categories/", "/staff/"):
+            r = self._get(self.admin, url)
+            self.assertEqual(r.status_code, 200, url)
+            self.assertContains(r, 'id="app"')
+
+    def test_staff_gets_notice_on_admin_only_pages(self):
+        for url in ("/personnel/", "/categories/", "/staff/"):
+            r = self._get(self.staff, url)
+            self.assertEqual(r.status_code, 200, url)
+            self.assertNotContains(r, 'id="app"')
+            self.assertContains(r, "requires an <strong>admin account</strong>")
+
+    def test_nav_is_role_gated(self):
+        admin_html = self._get(self.admin, "/staff/").content.decode()
+        staff_html = self._get(self.staff, "/staff/").content.decode()
+
+        def nav_of(html):
+            return html.split("<nav>", 1)[1].split("</nav>", 1)[0]
+
+        admin_nav, staff_nav = nav_of(admin_html), nav_of(staff_html)
+        for href in ("/personnel/", "/staff/", "/movements/", "/archived/", "/categories/"):
+            self.assertIn(f'href="{href}"', admin_nav)
+            self.assertNotIn(f'href="{href}"', staff_nav)
+        for href in ("/equipment/", "/requests/", "/trainings/"):
+            self.assertIn(f'href="{href}"', admin_nav)
+            self.assertIn(f'href="{href}"', staff_nav)
+
+    def test_home_redirects_by_role(self):
+        from django.test import Client
+
+        ac = Client(); ac.force_login(self.admin)
+        sc = Client(); sc.force_login(self.staff)
+        self.assertRedirects(ac.get("/"), "/personnel/", fetch_redirect_response=False)
+        self.assertRedirects(sc.get("/"), "/equipment/", fetch_redirect_response=False)
+
+    def test_not_yet_built_pages_render_placeholder(self):
+        r = self._get(self.admin, "/equipment/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "built in a later Step 7 sub-step")
+
+    def test_context_processor_flags(self):
+        from apps.core.context_processors import role
+
+        class Req:
+            pass
+
+        req = Req()
+        req.user = self.admin
+        self.assertEqual(role(req), {"is_admin": True, "can_permanently_delete": False})
+        req.user = self.staff
+        self.assertEqual(role(req), {"is_admin": False, "can_permanently_delete": False})
+        elevated = make_user("e", role=Role.ADMIN, can_delete=True)
+        req.user = elevated
+        self.assertEqual(role(req), {"is_admin": True, "can_permanently_delete": True})

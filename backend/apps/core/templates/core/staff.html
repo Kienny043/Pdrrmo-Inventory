@@ -1,0 +1,62 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Staff{% endblock %}
+{% block content %}
+<h1>Staff Management</h1>
+
+{% if not is_admin %}
+  <div class="notice">
+    This page requires an <strong>admin account</strong>. You're signed in as
+    <strong>{{ user.username }}</strong>. Ask an administrator for access.
+  </div>
+{% else %}
+  <div id="app">
+    <div class="toolbar">
+      <button id="btn-add" type="button">+ New Staff</button>
+      <span id="status" class="status" role="status" aria-live="polite"></span>
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th style="width:3rem"></th>
+          <th>Name</th><th>Position</th><th>Department</th>
+          <th>Contact</th><th>Status</th><th style="width:9rem"></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <p id="empty" class="hint" hidden>No staff yet.</p>
+  </div>
+
+  <template id="tpl-staff-form">
+    <form class="modal" enctype="multipart/form-data">
+      <h2 data-title>New Staff</h2>
+      <label>First name<input name="first_name" required autocomplete="off"></label>
+      <label>Last name<input name="last_name" required autocomplete="off"></label>
+      <label>Position<input name="position" autocomplete="off"></label>
+      <label>Department<input name="department" autocomplete="off"></label>
+      <label>Contact<input name="contact" autocomplete="off"></label>
+      <label>Status
+        <select name="status">
+          <option value="PERMANENT">Permanent</option>
+          <option value="CASUAL">Casual</option>
+          <option value="INTERN">Intern</option>
+          <option value="INACTIVE">Inactive</option>
+        </select>
+      </label>
+      <label>Photo<input name="photo" type="file" accept="image/*"></label>
+      <label class="check-label" data-remove-wrap hidden>
+        <input type="checkbox" name="remove_photo" value="true"> Remove current photo
+      </label>
+      <div class="form-error" data-error></div>
+      <div class="modal-actions">
+        <button type="submit">Save</button>
+        <button type="button" data-cancel>Cancel</button>
+      </div>
+    </form>
+  </template>
+
+  <script src="{% static 'core/staff.js' %}" defer></script>
+{% endif %}
+{% endblock %}

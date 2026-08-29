@@ -1,77 +1,8 @@
+/* Personnel-matrix page only. Shared styles live in common.css. */
 :root {
-  --line: #cfd4da;
-  --head-bg: #eef1f4;
   --band-mgr: #dfe9f6;
   --band-skl: #e6f2e6;
-  --ok: #1a7f37;
-  --err: #c1121f;
-  --danger: #b42318;
 }
-
-* { box-sizing: border-box; }
-
-body {
-  margin: 0;
-  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  color: #1c1c1c;
-  background: #fff;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: .5rem 1rem;
-  background: #1f2a37;
-  color: #fff;
-}
-.topbar .brand { font-weight: 600; }
-.topbar nav { margin-left: auto; display: flex; align-items: center; gap: 1rem; }
-.topbar nav a { color: #cfe0ff; text-decoration: none; }
-.topbar .who { opacity: .8; }
-.logout-form { margin: 0; }
-.logout-form button,
-.login-box button,
-.toolbar button {
-  font: inherit;
-  padding: .3rem .7rem;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: #f6f7f9;
-  cursor: pointer;
-}
-.toolbar button:disabled { opacity: .5; cursor: not-allowed; }
-
-main { padding: 1rem; }
-
-.notice {
-  padding: .75rem 1rem;
-  border: 1px solid #f0c36d;
-  background: #fdf6e3;
-  border-radius: 6px;
-  max-width: 60ch;
-}
-.notice.error { border-color: #f1a9a0; background: #fdecea; }
-
-.login-box { max-width: 320px; }
-.login-box label { display: block; margin: .5rem 0; }
-.login-box input { width: 100%; padding: .35rem; }
-
-.toolbar {
-  display: flex;
-  align-items: end;
-  gap: 1rem;
-  flex-wrap: wrap;
-  margin-bottom: .75rem;
-}
-.toolbar label { display: flex; flex-direction: column; font-size: 12px; gap: .2rem; }
-.toolbar select { font: inherit; padding: .3rem; min-width: 12rem; }
-
-.status { font-size: 12px; min-height: 1.2em; }
-.status.ok { color: var(--ok); }
-.status.error { color: var(--err); }
-
-.hint { color: #666; }
 
 .grid-wrap { overflow: auto; max-height: 78vh; border: 1px solid var(--line); }
 
@@ -135,10 +66,6 @@ main { padding: 1rem; }
 #grid input.year:focus { border-color: var(--line); background: #fff; outline: none; }
 #grid input.year:not(:placeholder-shown) { background: #f4f9f4; }
 
-.saving { box-shadow: inset 0 0 0 2px #f5c518 !important; }
-.flash-ok { box-shadow: inset 0 0 0 2px var(--ok) !important; }
-.flash-error { box-shadow: inset 0 0 0 2px var(--err) !important; }
-
 #grid td.row-actions { position: sticky; right: 0; background: #fff; }
 #grid td.row-actions button {
   font: inherit;
@@ -151,18 +78,3 @@ main { padding: 1rem; }
   cursor: pointer;
 }
 #grid td.row-actions button.danger { color: var(--danger); border-color: #e5b7b2; }
-
-.modal-backdrop {
-  position: fixed; inset: 0;
-  background: rgba(0, 0, 0, .35);
-  display: flex; align-items: center; justify-content: center;
-}
-.modal {
-  background: #fff; padding: 1.25rem; border-radius: 8px;
-  width: min(420px, 92vw);
-  display: flex; flex-direction: column; gap: .5rem;
-}
-.modal h2 { margin: 0 0 .25rem; }
-.modal label { display: flex; flex-direction: column; font-size: 12px; gap: .2rem; }
-.modal input, .modal select, .modal textarea { font: inherit; padding: .35rem; }
-.modal-actions { display: flex; gap: .5rem; margin-top: .5rem; }

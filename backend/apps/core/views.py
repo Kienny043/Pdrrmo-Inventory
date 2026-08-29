@@ -9,7 +9,7 @@ API views for the core app (spec Section 1 / 4).
 
 from django.contrib.auth.decorators import login_required
 from django.db import IntegrityError, transaction
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import mixins, status, viewsets
@@ -85,17 +85,42 @@ def training_catalog_list(request):
 
 
 @login_required
+def home_page(request):
+    """Send each role to a page it can actually use."""
+    return redirect("personnel-matrix" if _is_admin(request.user) else "equipment-page")
+
+
+@login_required
+def coming_soon_page(request):
+    """Placeholder for pages built in a later Step 7 sub-step."""
+    return render(request, "core/coming_soon.html")
+
+
+@login_required
 @ensure_csrf_cookie
 def personnel_matrix_page(request):
     """Server-rendered shell for the personnel/training-matrix page (spec Section 5, page 1).
 
     Renders only the shell + guarantees the CSRF cookie; all data is loaded
     client-side from the DRF API. Non-admin users get a notice instead of the
-    grid (every /api/personnel/ route is ADMIN-only).
+    grid (every /api/personnel/ route is ADMIN-only). ``is_admin`` comes from
+    the ``core.context_processors.role`` processor.
     """
-    profile = profile_for(request.user)
-    is_admin = request.user.is_superuser or profile.role == Role.ADMIN
-    return render(request, "core/matrix.html", {"is_admin": is_admin})
+    return render(request, "core/matrix.html")
+
+
+@login_required
+@ensure_csrf_cookie
+def categories_page(request):
+    """Shell for the Categories management page (spec Section 5, page 8). ADMIN-only."""
+    return render(request, "core/categories.html")
+
+
+@login_required
+@ensure_csrf_cookie
+def staff_page(request):
+    """Shell for the Staff management page (spec Section 5, page 3). ADMIN-only."""
+    return render(request, "core/staff.html")
 
 
 class PersonnelViewSet(viewsets.ModelViewSet):

@@ -297,7 +297,48 @@ Work through these in order, confirming before moving to the next step.
         list/create/destroy(**hard**, 204)/`set_attendance` — attendance
         here is a plain toggle, never a `TrainingRecord` upsert.
         `ManualAttendeeSerializer` adds a computed `district`.
-- [ ] 7. Remaining frontend pages (spec Section 5, pages 2–8)
+- [~] 7. Remaining frontend pages (spec Section 5, pages 2–8) — plain
+      Django templates + vanilla JS, no build step. Sub-split:
+      **7a** shared infra + Categories + Staff · **7b** Equipment +
+      Stock movements · **7c** Requests · **7d** Training schedules ·
+      **7e** Archived (tabbed). Each its own plan→build→verify (headless
+      Chromium click-through)→commit cycle.
+  - [x] **7a. Shared infra + Categories + Staff.**
+        - `static/core/common.js` → `window.App`: `api()` (fetch + CSRF;
+          also sends `FormData` as multipart), `el()`, `setStatus(node,…)`,
+          `flash()`, `summarise()`, `openModal(form, onSubmit)`,
+          `downloadCsv()`. `static/core/common.css`: topbar/nav,
+          `.notice`, `.toolbar`, `.status`, buttons + `button.danger`,
+          `.data-table` (bordered, sticky header, zebra, `.cell-input`,
+          `img.thumb`), `.modal*`, `.flash-*`/`.saving`, `.login-box`.
+        - `apps/core/context_processors.py:role` (wired in
+          `settings.TEMPLATES`) → `is_admin` / `can_permanently_delete`
+          on every template. `base.html` loads `common.{css,js}`, adds
+          `{% block extra_head %}`, and a **role-gated nav**: ADMIN sees
+          all 8 links, STAFF sees only Equipment / Requests / Trainings.
+          `/` (`home_page`) redirects by role. The 5 not-yet-built routes
+          (`equipment/`, `movements/`, `requests/`, `trainings/`,
+          `archived/`) point at `coming_soon_page` so nav resolves now.
+        - `matrix.js`/`matrix.css` refactored onto the shared helpers
+          (matrix.js aliases `el/api/flash` from `App`, delegates
+          `setStatus`; matrix.css keeps only `#grid` rules). Full
+          personnel-matrix click-through re-verified — behaviour
+          unchanged.
+        - **Categories page** (`/categories/`, `categories.js`): inline
+          add-row + blur-to-save name/description + `item_count` +
+          delete (409-with-message if it still has items). **Staff page**
+          (`/staff/`, `staff.js`): table w/ photo thumbnail; modal
+          create/edit (multipart photo upload); "Remove current photo"
+          checkbox on edit → `remove_photo`; per-row Archive. Both
+          ADMIN-only (STAFF → notice). No migration.
+  - [ ] **7b. Equipment dashboard + Stock movements** (pages 2, 4).
+        Not started.
+  - [ ] **7c. Requests + approval flow** (page 5). Not started.
+  - [ ] **7d. Training schedules** (page 6) — list + create/edit +
+        archive + expandable per-schedule panel (roster + attendance
+        toggle w/ matrix-bridge feedback + manual attendees). Not started.
+  - [ ] **7e. Archived** (page 7) — tabbed Items/Staff/Trainings/
+        Personnel, restore + conditional permanent-delete. Not started.
 - [ ] 8. Full `admin.py` registration for every model (spec 2.9) —
       cheap, do it once at the end rather than piecemeal
 - [ ] 9. Test end-to-end: personnel matrix across districts, equipment
@@ -316,8 +357,10 @@ Personnel models + CRUD + auth → Step 4 personnel/matrix frontend → Step 5
 remaining core models (`core/0003` inventory + `core/0004` training
 events) → Step 6 full inventory CRUD (6a catalog/custody, 6b stock
 integrity `services.py`, 6c training events + `attendance→TrainingRecord`
-bridge, `core/0005` `Personnel.user`). Steps 1–6 done; Step 7 (remaining
-frontend pages, spec §5 pages 2–8) is next. Remote `origin` is
+bridge, `core/0005` `Personnel.user`) → Step 7a shared frontend infra
+(`common.js`/`common.css`/`context_processors.py`, role-gated nav) +
+Categories & Staff pages. Steps 1–6 + 7a done; Step 7b (Equipment + Stock
+movements pages) is next. Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 

@@ -1,6 +1,11 @@
 (function () {
   "use strict";
 
+  // Shared helpers from common.js.
+  var el = App.el;
+  var api = App.api;
+  var flash = App.flash;
+
   var els = {
     district: document.getElementById("f-district"),
     municipality: document.getElementById("f-municipality"),
@@ -19,77 +24,8 @@
   var districts = [];      // ordered district names
   var rows = [];           // current personnel
 
-  // ---------- utilities ----------
-
-  function getCookie(name) {
-    var m = document.cookie.match("(^|; )" + name + "=([^;]*)");
-    return m ? decodeURIComponent(m[2]) : "";
-  }
-  var CSRF = getCookie("csrftoken");
-
-  function api(method, url, body) {
-    var opts = { method: method, credentials: "same-origin", headers: { Accept: "application/json" } };
-    if (body !== undefined) {
-      opts.headers["Content-Type"] = "application/json";
-      opts.body = JSON.stringify(body);
-    }
-    if (method !== "GET") opts.headers["X-CSRFToken"] = CSRF;
-    return fetch(url, opts).then(function (resp) {
-      if (resp.status === 204) return null;
-      return resp.json().catch(function () { return null; }).then(function (data) {
-        if (!resp.ok) {
-          var msg = (data && (data.detail || summarise(data))) || resp.status + " " + resp.statusText;
-          var err = new Error(msg);
-          err.status = resp.status;
-          throw err;
-        }
-        return data;
-      });
-    });
-  }
-
-  function summarise(obj) {
-    try {
-      return Object.keys(obj).map(function (k) {
-        return k + ": " + [].concat(obj[k]).join(" ");
-      }).join("; ");
-    } catch (e) { return String(obj); }
-  }
-
   function setStatus(msg, kind) {
-    els.status.textContent = msg || "";
-    els.status.className = "status" + (kind ? " " + kind : "");
-    if (kind === "ok") {
-      var snap = msg;
-      setTimeout(function () {
-        if (els.status.textContent === snap) { els.status.textContent = ""; els.status.className = "status"; }
-      }, 1500);
-    }
-  }
-
-  function flash(node, kind) {
-    if (!node) return;
-    node.classList.add("flash-" + kind);
-    setTimeout(function () { node.classList.remove("flash-" + kind); }, 900);
-  }
-
-  function el(tag, attrs) {
-    var node = document.createElement(tag);
-    if (attrs) {
-      Object.keys(attrs).forEach(function (k) {
-        var v = attrs[k];
-        if (k === "class") node.className = v;
-        else if (k === "text") node.textContent = v;
-        else if (k === "html") node.innerHTML = v;
-        else if (k in node) node[k] = v;
-        else node.setAttribute(k, v);
-      });
-    }
-    for (var i = 2; i < arguments.length; i++) {
-      var c = arguments[i];
-      if (c != null) node.append(c);
-    }
-    return node;
+    App.setStatus(els.status, msg, kind);
   }
 
   function abbr(label) {
