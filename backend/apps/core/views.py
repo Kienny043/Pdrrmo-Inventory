@@ -18,10 +18,22 @@ from rest_framework.response import Response
 
 from . import reference
 from .choices import Role
-from .models import Personnel, TrainingRecord, profile_for
-from .permissions import CanPermanentlyDelete, IsAdmin
+from .models import (
+    Category,
+    InventoryItem,
+    ItemHolderLog,
+    Personnel,
+    Staff,
+    TrainingRecord,
+    profile_for,
+)
+from .permissions import CanPermanentlyDelete, IsAdmin, IsAdminOrReadOnly
 from .serializers import (
+    CategorySerializer,
+    InventoryItemSerializer,
+    ItemHolderLogSerializer,
     PersonnelSerializer,
+    StaffSerializer,
     TrainingRecordCellSerializer,
     TrainingRecordCellWriteSerializer,
 )
@@ -203,3 +215,206 @@ class PersonnelViewSet(viewsets.ModelViewSet):
             record.year_attained = year
             record.save(update_fields=["year_attained", "updated_at"])
             return record
+
+
+# ==========================================================================
+# Step 6a — catalog + custody CRUD (spec Section 4)
+# ==========================================================================
+
+
+def _truthy(value):
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+class ArchiveLifecycleMixin:
+    """Shared soft-archive lifecycle for models with the is_archived triple.
+
+    - list                             -> active rows only
+    - GET  <resource>/archived/        -> archived rows only
+    - DELETE <resource>/<pk>/          -> soft-archive (idempotent 200)
+    - POST <resource>/<pk>/restore/    -> un-archive (idempotent 200)
+    - DELETE <resource>/<pk>/permanent-delete/ -> hard delete, 409 unless archived
+    - PATCH on an archived row -> 409
+
+    Subclass sets ``queryset`` + ``archived_read_only_detail`` and returns
+    ``CanPermanentlyDelete`` for the ``permanent_delete`` action.
+    """
+
+    archived_read_only_detail = "This record is archived; restore it before editing."
+    _archive_fields = ["is_archived", "archived_at", "archived_by", "updated_at"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action == "list":
+            return qs.filter(is_archived=False)
+        if self.action == "archived":
+            return qs.filter(is_archived=True)
+        return qs
+
+    def update(self, request, *args, **kwargs):
+        if self.get_object().is_archived:
+            return Response(
+                {"detail": self.archived_read_only_detail},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        obj = self.get_object()
+        if not obj.is_archived:
+            obj.is_archived = True
+            obj.archived_at = timezone.now()
+            obj.archived_by = request.user
+            obj.save(update_fields=self._archive_fields)
+        return Response(self.get_serializer(obj).data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"])
+    def archived(self, request):
+        data = self.get_serializer(self.get_queryset(), many=True).data
+        return Response(data)
+
+    @action(detail=True, methods=["post"])
+    def restore(self, request, pk=None):
+        obj = self.get_object()
+        if obj.is_archived:
+            obj.is_archived = False
+            obj.archived_at = None
+            obj.archived_by = None
+            obj.save(update_fields=self._archive_fields)
+        return Response(self.get_serializer(obj).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["delete"], url_path="permanent-delete")
+    def permanent_delete(self, request, pk=None):
+        obj = self.get_object()
+        if not obj.is_archived:
+            return Response(
+                {"detail": "Archive this record before permanently deleting it."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        obj.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CategoryViewSet(viewsets.ModelViewSet):
+    """GET/POST /api/categories/, GET/PATCH/DELETE /api/categories/<pk>/ — ADMIN only.
+
+    No archive lifecycle (spec 3.1 gives Category no is_archived); DELETE is a
+    hard delete, refused with 409 while the category still has items.
+    """
+
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    permission_classes = [IsAdmin]
+    lookup_value_regex = r"\d+"
+    pagination_class = None
+
+    def destroy(self, request, *args, **kwargs):
+        category = self.get_object()
+        n = category.items.count()
+        if n:
+            return Response(
+                {"detail": f"Category still has {n} item(s); reassign or delete them first."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+
+class StaffViewSet(ArchiveLifecycleMixin, viewsets.ModelViewSet):
+    """CRUD + archive lifecycle for Staff — ADMIN only (permanent-delete elevated)."""
+
+    queryset = Staff.objects.all()
+    serializer_class = StaffSerializer
+    lookup_value_regex = r"\d+"
+    pagination_class = None
+    archived_read_only_detail = "This staff record is archived; restore it before editing."
+
+    def get_permissions(self):
+        if self.action == "permanent_delete":
+            return [CanPermanentlyDelete()]
+        return [IsAdmin()]
+
+    def update(self, request, *args, **kwargs):
+        # 2.7: honour remove_photo before the serializer runs. Only meaningful
+        # on an editable record; the archived guard lives in the mixin update()
+        # that super() calls next.
+        instance = self.get_object()
+        if not instance.is_archived and _truthy(request.data.get("remove_photo")):
+            if instance.photo:
+                instance.photo.delete(save=False)
+            instance.photo = None
+            instance.save(update_fields=["photo", "updated_at"])
+        return super().update(request, *args, **kwargs)
+
+
+class InventoryItemViewSet(ArchiveLifecycleMixin, viewsets.ModelViewSet):
+    """CRUD + archive lifecycle + holder-log auto-write + holder-history (spec Section 4).
+
+    STAFF may GET the active list/detail (to build an equipment request); every
+    write, plus /archived/ and /holder-history/, is ADMIN.
+    """
+
+    queryset = InventoryItem.objects.select_related("category", "memorandum_receipt")
+    serializer_class = InventoryItemSerializer
+    lookup_value_regex = r"\d+"
+    pagination_class = None
+    archived_read_only_detail = "This item is archived; restore it before editing."
+
+    def get_permissions(self):
+        if self.action == "permanent_delete":
+            return [CanPermanentlyDelete()]
+        if self.action in ("list", "retrieve"):
+            return [IsAdminOrReadOnly()]
+        return [IsAdmin()]
+
+    def _holder_note(self):
+        return str(self.request.data.get("holder_note", "")).strip()
+
+    def perform_create(self, serializer):
+        with transaction.atomic():
+            item = serializer.save()
+            if item.memorandum_receipt_id:
+                ItemHolderLog.objects.create(
+                    item=item,
+                    staff=item.memorandum_receipt,
+                    action=ItemHolderLog.Action.ASSIGNED,
+                    performed_by=self.request.user,
+                    note=self._holder_note(),
+                )
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.is_archived:
+            return Response(
+                {"detail": self.archived_read_only_detail},
+                status=status.HTTP_409_CONFLICT,
+            )
+        old_holder_id = instance.memorandum_receipt_id
+        with transaction.atomic():
+            response = super().update(request, *args, **kwargs)
+            instance.refresh_from_db()
+            new_holder_id = instance.memorandum_receipt_id
+            if new_holder_id != old_holder_id:
+                note = self._holder_note()
+                if old_holder_id:
+                    ItemHolderLog.objects.create(
+                        item=instance,
+                        staff_id=old_holder_id,
+                        action=ItemHolderLog.Action.REMOVED,
+                        performed_by=request.user,
+                        note=note,
+                    )
+                if new_holder_id:
+                    ItemHolderLog.objects.create(
+                        item=instance,
+                        staff_id=new_holder_id,
+                        action=ItemHolderLog.Action.ASSIGNED,
+                        performed_by=request.user,
+                        note=note,
+                    )
+        return response
+
+    @action(detail=True, methods=["get"], url_path="holder-history")
+    def holder_history(self, request, pk=None):
+        item = self.get_object()
+        logs = item.holder_logs.select_related("staff", "performed_by").all()
+        return Response(ItemHolderLogSerializer(logs, many=True).data)

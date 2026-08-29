@@ -2,12 +2,15 @@
 the Step 3a Personnel / TrainingRecord models, and the Step 3b CRUD API."""
 
 import datetime
+import shutil
+import tempfile
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -836,3 +839,297 @@ class ManualAttendeeModelTests(TestCase):
         self.assertEqual(self.sched.manual_attendees.count(), 2)
         self.sched.delete()
         self.assertEqual(ManualAttendee.objects.count(), 0)
+
+
+# --------------------------------------------------------------------------
+# Step 6a — catalog + custody CRUD (spec Section 4)
+# --------------------------------------------------------------------------
+
+# ImageField.save() writes bytes without image validation; the remove_photo
+# PATCH path never re-validates the photo, so placeholder bytes are fine.
+_FAKE_IMAGE = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+class Step6aPermissionTests(TestCase):
+    def setUp(self):
+        self.staff = make_user("s", role=Role.STAFF)
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.admin_del = make_user("ad", role=Role.ADMIN, can_delete=True)
+        self.cat = Category.objects.create(name="Radios")
+        self.person = Staff.objects.create(first_name="Ana", last_name="Cruz")
+        self.item = InventoryItem.objects.create(category=self.cat, name="VHF", quantity=3)
+
+    def c(self, user):
+        cl = APIClient()
+        cl.force_authenticate(user=user)
+        return cl
+
+    def test_categories_admin_only(self):
+        s = self.c(self.staff)
+        self.assertEqual(s.get("/api/categories/").status_code, 403)
+        self.assertEqual(s.post("/api/categories/", {"name": "X"}).status_code, 403)
+        self.assertEqual(s.patch(f"/api/categories/{self.cat.pk}/", {"name": "Y"}).status_code, 403)
+        self.assertEqual(s.delete(f"/api/categories/{self.cat.pk}/").status_code, 403)
+        a = self.c(self.admin)
+        self.assertEqual(a.get("/api/categories/").status_code, 200)
+        self.assertEqual(a.post("/api/categories/", {"name": "New Cat"}).status_code, 201)
+
+    def test_staff_admin_only_and_permanent_delete_gate(self):
+        s = self.c(self.staff)
+        pk = self.person.pk
+        for call in (
+            lambda: s.get("/api/staff/"),
+            lambda: s.post("/api/staff/", {"first_name": "B", "last_name": "C"}),
+            lambda: s.get(f"/api/staff/{pk}/"),
+            lambda: s.patch(f"/api/staff/{pk}/", {"position": "x"}),
+            lambda: s.delete(f"/api/staff/{pk}/"),
+            lambda: s.get("/api/staff/archived/"),
+            lambda: s.post(f"/api/staff/{pk}/restore/"),
+            lambda: s.delete(f"/api/staff/{pk}/permanent-delete/"),
+        ):
+            self.assertEqual(call().status_code, 403)
+        a = self.c(self.admin)
+        self.assertEqual(a.get("/api/staff/").status_code, 200)
+        arch = Staff.objects.create(first_name="T", last_name="T", is_archived=True)
+        self.assertEqual(a.delete(f"/api/staff/{arch.pk}/permanent-delete/").status_code, 403)
+        self.assertEqual(
+            self.c(self.admin_del).delete(f"/api/staff/{arch.pk}/permanent-delete/").status_code, 204
+        )
+
+    def test_items_staff_can_read_active_only(self):
+        s = self.c(self.staff)
+        self.assertEqual(s.get("/api/items/").status_code, 200)
+        self.assertEqual(s.get(f"/api/items/{self.item.pk}/").status_code, 200)
+        self.assertEqual(s.post("/api/items/", {"category": self.cat.pk, "name": "z"}).status_code, 403)
+        self.assertEqual(s.patch(f"/api/items/{self.item.pk}/", {"name": "z"}).status_code, 403)
+        self.assertEqual(s.delete(f"/api/items/{self.item.pk}/").status_code, 403)
+        self.assertEqual(s.get("/api/items/archived/").status_code, 403)
+        self.assertEqual(s.get(f"/api/items/{self.item.pk}/holder-history/").status_code, 403)
+        InventoryItem.objects.create(category=self.cat, name="hidden", is_archived=True)
+        names = {r["name"] for r in s.get("/api/items/").json()}
+        self.assertEqual(names, {"VHF"})
+
+    def test_items_permanent_delete_gate(self):
+        arch = InventoryItem.objects.create(category=self.cat, name="old", is_archived=True)
+        self.assertEqual(
+            self.c(self.admin).delete(f"/api/items/{arch.pk}/permanent-delete/").status_code, 403
+        )
+        self.assertEqual(
+            self.c(self.admin_del).delete(f"/api/items/{arch.pk}/permanent-delete/").status_code, 204
+        )
+
+    def test_unauthenticated_blocked_everywhere(self):
+        anon = APIClient()
+        self.assertEqual(anon.get("/api/categories/").status_code, 403)
+        self.assertEqual(anon.get("/api/staff/").status_code, 403)
+        self.assertEqual(anon.get("/api/items/").status_code, 403)
+
+
+class Step6aArchiveLifecycleTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.admin_del = make_user("ad", role=Role.ADMIN, can_delete=True)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        self.cat = Category.objects.create(name="Tools")
+        self.item = InventoryItem.objects.create(category=self.cat, name="Spreader", quantity=2)
+        self.staff = Staff.objects.create(first_name="Ben", last_name="Uy")
+
+    def test_staff_archive_restore_permanent_delete(self):
+        pk = self.staff.pk
+        r = self.c.delete(f"/api/staff/{pk}/")
+        self.assertEqual(r.status_code, 200)
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_archived)
+        self.assertIsNotNone(self.staff.archived_at)
+        self.assertEqual(self.staff.archived_by, self.admin)
+        self.assertEqual(r.json()["archived_by"], "a")
+        self.assertNotIn(pk, [x["id"] for x in self.c.get("/api/staff/").json()])
+        self.assertIn(pk, [x["id"] for x in self.c.get("/api/staff/archived/").json()])
+        self.assertEqual(self.c.patch(f"/api/staff/{pk}/", {"position": "x"}).status_code, 409)
+        self.assertEqual(self.c.delete(f"/api/staff/{pk}/").status_code, 200)  # idempotent
+        self.assertEqual(self.c.delete(f"/api/staff/{pk}/permanent-delete/").status_code, 403)
+        cd = APIClient()
+        cd.force_authenticate(user=self.admin_del)
+        self.assertEqual(cd.delete(f"/api/staff/{pk}/permanent-delete/").status_code, 204)
+        self.assertFalse(Staff.objects.filter(pk=pk).exists())
+
+    def test_staff_restore_clears_state(self):
+        pk = self.staff.pk
+        self.c.delete(f"/api/staff/{pk}/")
+        r = self.c.post(f"/api/staff/{pk}/restore/")
+        self.assertEqual(r.status_code, 200)
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_archived)
+        self.assertIsNone(self.staff.archived_at)
+        self.assertIsNone(self.staff.archived_by)
+        self.assertEqual(self.c.post(f"/api/staff/{pk}/restore/").status_code, 200)
+
+    def test_item_archive_lifecycle_and_permanent_delete_precondition(self):
+        pk = self.item.pk
+        cd = APIClient()
+        cd.force_authenticate(user=self.admin_del)
+        # elevated user, but item not archived -> 409 precondition
+        self.assertEqual(cd.delete(f"/api/items/{pk}/permanent-delete/").status_code, 409)
+        self.assertEqual(self.c.delete(f"/api/items/{pk}/").status_code, 200)
+        self.item.refresh_from_db()
+        self.assertTrue(self.item.is_archived)
+        self.assertEqual(self.c.patch(f"/api/items/{pk}/", {"name": "z"}).status_code, 409)
+        self.assertIn(pk, [x["id"] for x in self.c.get("/api/items/archived/").json()])
+        self.assertEqual(self.c.post(f"/api/items/{pk}/restore/").status_code, 200)
+        self.item.refresh_from_db()
+        self.assertFalse(self.item.is_archived)
+        # now archived + elevated -> 204
+        self.c.delete(f"/api/items/{pk}/")
+        self.assertEqual(cd.delete(f"/api/items/{pk}/permanent-delete/").status_code, 204)
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="core-test-media-"))
+class Step6aRemovePhotoTests(TestCase):
+    @classmethod
+    def tearDownClass(cls):
+        from django.conf import settings
+
+        shutil.rmtree(settings.MEDIA_ROOT, ignore_errors=True)
+        super().tearDownClass()
+
+    def setUp(self):
+        self.c = APIClient()
+        self.c.force_authenticate(user=make_user("a", role=Role.ADMIN))
+        self.staff = Staff.objects.create(first_name="Ana", last_name="Cruz")
+        self.staff.photo.save(
+            "p.png", SimpleUploadedFile("p.png", _FAKE_IMAGE, "image/png"), save=True
+        )
+
+    def test_remove_photo_clears_the_field(self):
+        self.assertTrue(self.staff.photo)
+        r = self.c.patch(f"/api/staff/{self.staff.pk}/", {"remove_photo": "true"})
+        self.assertEqual(r.status_code, 200)
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.photo)
+        self.assertIsNone(r.json()["photo"])
+
+    def test_patch_without_remove_photo_keeps_it(self):
+        r = self.c.patch(f"/api/staff/{self.staff.pk}/", {"position": "Head"})
+        self.assertEqual(r.status_code, 200)
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.photo)
+        self.assertEqual(self.staff.position, "Head")
+
+    def test_remove_photo_falsy_value_is_ignored(self):
+        r = self.c.patch(f"/api/staff/{self.staff.pk}/", {"remove_photo": "false"})
+        self.assertEqual(r.status_code, 200)
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.photo)
+
+
+class Step6aHolderLogTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        self.cat = Category.objects.create(name="Gear")
+        self.a = Staff.objects.create(first_name="Aa", last_name="Aa")
+        self.b = Staff.objects.create(first_name="Bb", last_name="Bb")
+
+    def test_create_with_holder_writes_assigned_log(self):
+        r = self.c.post(
+            "/api/items/",
+            {"category": self.cat.pk, "name": "Radio", "memorandum_receipt": self.a.pk},
+        )
+        self.assertEqual(r.status_code, 201)
+        item = InventoryItem.objects.get(pk=r.json()["id"])
+        logs = list(item.holder_logs.all())
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(
+            (logs[0].action, logs[0].staff_id, logs[0].performed_by),
+            (ItemHolderLog.Action.ASSIGNED, self.a.pk, self.admin),
+        )
+
+    def test_create_without_holder_writes_no_log(self):
+        r = self.c.post("/api/items/", {"category": self.cat.pk, "name": "Rope"})
+        item = InventoryItem.objects.get(pk=r.json()["id"])
+        self.assertEqual(item.holder_logs.count(), 0)
+
+    def test_patch_changing_holder_writes_removed_then_assigned(self):
+        item = InventoryItem.objects.create(
+            category=self.cat, name="Drone", memorandum_receipt=self.a
+        )
+        ItemHolderLog.objects.create(item=item, staff=self.a, action=ItemHolderLog.Action.ASSIGNED)
+        r = self.c.patch(
+            f"/api/items/{item.pk}/",
+            {"memorandum_receipt": self.b.pk, "holder_note": "reassigned"},
+        )
+        self.assertEqual(r.status_code, 200)
+        new_logs = list(item.holder_logs.order_by("id"))[1:]
+        self.assertEqual(
+            [(x.action, x.staff_id, x.note) for x in new_logs],
+            [
+                (ItemHolderLog.Action.REMOVED, self.a.pk, "reassigned"),
+                (ItemHolderLog.Action.ASSIGNED, self.b.pk, "reassigned"),
+            ],
+        )
+
+    def test_patch_clearing_holder_writes_removed_only(self):
+        item = InventoryItem.objects.create(
+            category=self.cat, name="Kit", memorandum_receipt=self.a
+        )
+        r = self.c.patch(
+            f"/api/items/{item.pk}/", {"memorandum_receipt": None}, format="json"
+        )
+        self.assertEqual(r.status_code, 200)
+        logs = list(item.holder_logs.all())
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(
+            (logs[0].action, logs[0].staff_id), (ItemHolderLog.Action.REMOVED, self.a.pk)
+        )
+
+    def test_patch_no_holder_change_writes_no_log(self):
+        item = InventoryItem.objects.create(
+            category=self.cat, name="Case", memorandum_receipt=self.a
+        )
+        self.c.patch(f"/api/items/{item.pk}/", {"remarks": "scuffed"})
+        self.assertEqual(item.holder_logs.count(), 0)
+
+    def test_holder_history_endpoint_returns_logs_newest_first(self):
+        item = InventoryItem.objects.create(category=self.cat, name="Bag")
+        self.c.patch(f"/api/items/{item.pk}/", {"memorandum_receipt": self.a.pk})
+        self.c.patch(f"/api/items/{item.pk}/", {"memorandum_receipt": self.b.pk})
+        r = self.c.get(f"/api/items/{item.pk}/holder-history/")
+        self.assertEqual(r.status_code, 200)
+        rows = r.json()
+        self.assertEqual(len(rows), 3)  # assign a, remove a, assign b
+        self.assertEqual((rows[0]["action"], rows[0]["staff"]), ("ASSIGNED", self.b.pk))
+
+
+class Step6aCategoryAndQuantityTests(TestCase):
+    def setUp(self):
+        self.c = APIClient()
+        self.c.force_authenticate(user=make_user("a", role=Role.ADMIN))
+        self.cat = Category.objects.create(name="Comms")
+
+    def test_category_delete_blocked_while_it_has_items(self):
+        InventoryItem.objects.create(category=self.cat, name="Radio")
+        r = self.c.delete(f"/api/categories/{self.cat.pk}/")
+        self.assertEqual(r.status_code, 409)
+        self.assertTrue(Category.objects.filter(pk=self.cat.pk).exists())
+
+    def test_empty_category_deletes(self):
+        empty = Category.objects.create(name="Empty")
+        self.assertEqual(self.c.delete(f"/api/categories/{empty.pk}/").status_code, 204)
+
+    def test_category_item_count_field(self):
+        InventoryItem.objects.create(category=self.cat, name="A")
+        InventoryItem.objects.create(category=self.cat, name="B")
+        row = next(x for x in self.c.get("/api/categories/").json() if x["id"] == self.cat.pk)
+        self.assertEqual(row["item_count"], 2)
+
+    def test_item_quantity_writable_on_create_readonly_on_patch(self):
+        r = self.c.post("/api/items/", {"category": self.cat.pk, "name": "Batt", "quantity": 5})
+        self.assertEqual(r.status_code, 201)
+        pk = r.json()["id"]
+        self.assertEqual(r.json()["quantity"], 5)
+        r2 = self.c.patch(f"/api/items/{pk}/", {"quantity": 99, "remarks": "note"})
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.json()["quantity"], 5)
+        self.assertEqual(r2.json()["remarks"], "note")

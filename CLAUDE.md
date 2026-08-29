@@ -206,7 +206,39 @@ Work through these in order, confirming before moving to the next step.
         §1.1; `org_affiliation` is the shared `choices.OrgAffiliation`,
         not a re-declared enum, per 2.5). The attendance→`TrainingRecord`
         auto-upsert is Step 6.
-- [ ] 6. Backend CRUD for the rest of inventory (spec Section 4)
+- [~] 6. Backend CRUD for the rest of inventory (spec Section 4). Split
+      into three:
+  - [x] **6a. Catalog + custody CRUD** — `CategoryViewSet`,
+        `StaffViewSet`, `InventoryItemViewSet` on the `SimpleRouter` in
+        `apps/core/urls.py` (`/api/categories/`, `/api/staff/…`,
+        `/api/items/…` — all §4 routes incl. `archived/`, `restore/`,
+        `permanent-delete/`, and `items/<pk>/holder-history/`). New
+        `ArchiveLifecycleMixin` in `views.py` factors the soft-archive
+        lifecycle (list=active, `GET archived/`, `DELETE`=idempotent
+        soft-archive 200, `restore/`, `permanent-delete/` 409-unless-
+        archived) — **reused by `TrainingScheduleViewSet` in 6c**. New
+        `IsAdminOrReadOnly` permission (STAFF may GET active items;
+        every write + `archived/` + `holder-history/` is ADMIN).
+        Behavioral pieces landed: `remove_photo` in `StaffViewSet.update`
+        (2.7); `ItemHolderLog` auto-write on item create-with-holder and
+        on PATCH holder change (old→REMOVED, new→ASSIGNED, `holder_note`
+        carried), `holder-history` returns them newest-first;
+        `InventoryItem.quantity` stripped in the serializer's `update()`
+        (writable on create only); `CategoryViewSet.destroy` → 409 while
+        the category still has items. No migration.
+  - [ ] **6b. Stock integrity** — `apps/core/services.py`
+        (`apply_stock_movement` + `InsufficientStock`), `/api/movements/add/`
+        (atomic per 2.1) + `/api/movements/`, `/api/requests/` +
+        `PATCH /api/requests/<pk>/approve/` (`{"decision": …}`,
+        PENDING-only, APPROVED path reuses the same helper per 2.12).
+        Not started.
+  - [ ] **6c. Training events + matrix bridge** — `TrainingScheduleViewSet`
+        (reuses `ArchiveLifecycleMixin`) + `register/`/`cancel-registration/`/
+        `registrations/`/`my-registrations/`/`attendance/<user_id>/`,
+        nested Manual Attendees (`path()` entries). Adds nullable
+        `Personnel.user` OneToOne (migration `core/0005`) so
+        `attendance/<user_id>/` can upsert a `TrainingRecord` when
+        `matrix_training_key` is set. Not started.
 - [ ] 7. Remaining frontend pages (spec Section 5, pages 2–8)
 - [ ] 8. Full `admin.py` registration for every model (spec 2.9) —
       cheap, do it once at the end rather than piecemeal
@@ -224,8 +256,9 @@ Work through these in order, confirming before moving to the next step.
 On branch `main`: `11c8a3c` scaffold → Step 2 reference-data → Step 3a/3b
 Personnel models + CRUD + auth → Step 4 personnel/matrix frontend → Step 5
 remaining core models (`core/0003` inventory + `core/0004` training
-events). Steps 1–5 done; Step 6 (backend CRUD for the rest of inventory,
-spec §4) is next. Remote `origin` is
+events) → Step 6a catalog/custody CRUD. Steps 1–5 + 6a done; Step 6b
+(stock integrity — movements + request approval) is next. Remote `origin`
+is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 
