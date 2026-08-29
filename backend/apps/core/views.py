@@ -142,6 +142,17 @@ def movements_page(request):
     return render(request, "core/movements.html")
 
 
+@login_required
+@ensure_csrf_cookie
+def requests_page(request):
+    """Shell for the Requests page (spec Section 5, page 5).
+
+    STAFF see and create only their own requests; ADMIN see all and can
+    approve/reject. The table gates the action column on ``is_admin``.
+    """
+    return render(request, "core/requests.html")
+
+
 class PersonnelViewSet(viewsets.ModelViewSet):
     """CRUD + archive lifecycle + matrix-cell upsert for Personnel (spec Section 4).
 

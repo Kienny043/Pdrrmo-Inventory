@@ -1726,9 +1726,12 @@ class Step7aPageShellTests(TestCase):
         self.assertRedirects(sc.get("/"), "/equipment/", fetch_redirect_response=False)
 
     def test_not_yet_built_pages_render_placeholder(self):
-        r = self._get(self.admin, "/equipment/")
-        self.assertEqual(r.status_code, 200)
-        self.assertContains(r, "built in a later Step 7 sub-step")
+        # Routes still wired to coming_soon_page. Shrinks as 7d/7e land:
+        # /trainings/ -> 7d, /archived/ -> 7e.
+        for url in ("/trainings/", "/archived/"):
+            r = self._get(self.admin, url)
+            self.assertEqual(r.status_code, 200, url)
+            self.assertContains(r, "built in a later Step 7 sub-step")
 
     def test_context_processor_flags(self):
         from apps.core.context_processors import role
@@ -1788,3 +1791,40 @@ class Step7bPageShellTests(TestCase):
         nav = self.ac.get("/equipment/").content.decode().split("<nav>", 1)[1].split("</nav>", 1)[0]
         self.assertIn('href="/equipment/"', nav)
         self.assertIn('href="/movements/"', nav)
+
+
+# --------------------------------------------------------------------------
+# Step 7c — Requests page shell
+# --------------------------------------------------------------------------
+
+
+class Step7cRequestsPageShellTests(TestCase):
+    def setUp(self):
+        from django.test import Client
+
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.staff = make_user("s", role=Role.STAFF)
+        self.ac = Client(); self.ac.force_login(self.admin)
+        self.sc = Client(); self.sc.force_login(self.staff)
+
+    def test_admin_shell_has_action_column(self):
+        r = self.ac.get("/requests/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'data-is-admin="1"')
+        self.assertContains(r, 'id="request-form"')
+        # the actions <th> is only rendered for admin
+        header = r.content.decode().split("<thead>", 1)[1].split("</thead>", 1)[0]
+        self.assertEqual(header.count("<th"), 7)
+
+    def test_staff_shell_no_action_column_but_can_request(self):
+        r = self.sc.get("/requests/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'data-is-admin="0"')
+        self.assertContains(r, 'id="request-form"')  # STAFF can still submit
+        header = r.content.decode().split("<thead>", 1)[1].split("</thead>", 1)[0]
+        self.assertEqual(header.count("<th"), 6)
+
+    def test_requests_nav_link_resolves_for_both_roles(self):
+        for client in (self.ac, self.sc):
+            nav = client.get("/requests/").content.decode().split("<nav>", 1)[1].split("</nav>", 1)[0]
+            self.assertIn('href="/requests/"', nav)

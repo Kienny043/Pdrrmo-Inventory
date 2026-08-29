@@ -1,0 +1,30 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Requests{% endblock %}
+{% block content %}
+<h1>Equipment Requests</h1>
+
+<div id="app" data-is-admin="{{ is_admin|yesno:'1,0' }}">
+  <form id="request-form" class="record-form">
+    <label>Item<select name="item" required></select></label>
+    <label>Quantity<input name="quantity" type="number" min="1" value="1" required></label>
+    <label>Note<input name="note" autocomplete="off"></label>
+    <button type="submit">Submit request</button>
+    <span id="status" class="status" role="status" aria-live="polite"></span>
+  </form>
+
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Item</th><th style="width:4rem">Qty</th><th style="width:7rem">Status</th>
+        <th>Note</th><th>Requester</th><th>Decided by</th>
+        {% if is_admin %}<th style="width:13rem"></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <p id="empty" class="hint" hidden>No requests yet.</p>
+</div>
+
+<script src="{% static 'core/requests.js' %}" defer></script>
+{% endblock %}

@@ -356,7 +356,22 @@ Work through these in order, confirming before moving to the next step.
           resolves to the collection's `item()` method, not the control
           named "item" (switched to `querySelector`); an empty `<tbody>`
           isn't "visible" to Playwright (assert on `.data-table`).
-  - [ ] **7c. Requests + approval flow** (page 5). Not started.
+  - [x] **7c. Requests + approval flow** (page 5). `/requests/`,
+        `requests.js`. No migration. Visible to **both roles**: STAFF and
+        ADMIN both get the new-request form (item `<select>` + qty +
+        note → `POST /api/requests/`); `GET /api/requests/` is
+        server-scoped so STAFF only ever see their own rows. Table: item
+        · qty · status · note · requester · decided-by. STAFF: no actions
+        column. ADMIN: per **PENDING** row an Approve / Reject pair →
+        `PATCH /api/requests/<pk>/approve/ {decision}`; a 400
+        (`InsufficientStock`) renders the message in a `.form-error` on
+        that row's actions cell and leaves the row PENDING (Approve
+        stays enabled to retry); decided rows render **no controls at
+        all** (client-side, not relying on the backend 409).
+        - Also fixed a stale test: `test_not_yet_built_pages_render_
+          placeholder` still asserted `/equipment/` shows the
+          coming-soon page — outdated since 7b made it real (the 7b
+          suite run missed it). Now checks `/trainings/` + `/archived/`.
   - [ ] **7d. Training schedules** (page 6) — list + create/edit +
         archive + expandable per-schedule panel (roster + attendance
         toggle w/ matrix-bridge feedback + manual attendees). Not started.
@@ -382,7 +397,8 @@ events) → Step 6 full inventory CRUD (6a catalog/custody, 6b stock
 integrity `services.py`, 6c training events + `attendance→TrainingRecord`
 bridge, `core/0005` `Personnel.user`) → Step 7a shared frontend infra +
 Categories/Staff pages → Step 7b Equipment + Stock movements pages. Steps
-1–6 + 7a + 7b done; Step 7c (Requests page) is next. Remote `origin` is
+1–6 + 7a–7c done; Step 7d (Training schedules page) is next. Remote
+`origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 
