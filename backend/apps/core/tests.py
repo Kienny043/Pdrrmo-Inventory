@@ -1,5 +1,7 @@
 """Tests for the reference-data constants, their two read-only endpoints,
-and the Step 3 Personnel / TrainingRecord models."""
+the Step 3a Personnel / TrainingRecord models, and the Step 3b CRUD API."""
+
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -8,8 +10,9 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from . import reference
-from .choices import TRAINING_YEAR_MAX, TRAINING_YEAR_MIN, OrgAffiliation
-from .models import Personnel, TrainingRecord
+from .choices import TRAINING_YEAR_MAX, TRAINING_YEAR_MIN, OrgAffiliation, Role
+from .models import Personnel, TrainingRecord, UserProfile, profile_for
+from .views import PersonnelViewSet
 
 
 class MunicipalityConstantsTests(TestCase):
@@ -188,3 +191,283 @@ class TrainingRecordModelTests(TestCase):
                 TrainingRecord(personnel=self.p, training_key="SFA", year_attained=bad).full_clean()
         for ok in (TRAINING_YEAR_MIN, 2020, TRAINING_YEAR_MAX):
             TrainingRecord(personnel=self.p, training_key="SFA", year_attained=ok).full_clean()  # no raise
+
+
+# --------------------------------------------------------------------------
+# Step 3b — Personnel / Training Matrix CRUD API
+# --------------------------------------------------------------------------
+
+User = get_user_model()
+
+
+def make_user(username, role=Role.STAFF, can_delete=False, superuser=False):
+    if superuser:
+        return User.objects.create_superuser(username, "", "pw")
+    u = User.objects.create_user(username, password="pw")
+    p = profile_for(u)  # signal already created it; this is the safe accessor
+    p.role = role
+    p.can_permanently_delete = can_delete
+    p.save()
+    return u
+
+
+class UserProfileSignalTests(TestCase):
+    def test_profile_auto_created_for_new_user(self):
+        u = User.objects.create_user("fresh", password="pw")
+        self.assertTrue(UserProfile.objects.filter(user=u).exists())
+        self.assertEqual(u.profile.role, Role.STAFF)
+        self.assertFalse(u.profile.can_permanently_delete)
+
+    def test_profile_for_is_idempotent(self):
+        u = User.objects.create_user("x", password="pw")
+        self.assertEqual(profile_for(u).pk, profile_for(u).pk)
+        self.assertEqual(UserProfile.objects.filter(user=u).count(), 1)
+
+
+class PersonnelPermissionTests(TestCase):
+    def setUp(self):
+        self.staff = make_user("staff", role=Role.STAFF)
+        self.admin = make_user("admin", role=Role.ADMIN)
+        self.admin_del = make_user("admindel", role=Role.ADMIN, can_delete=True)
+        self.superuser = make_user("root", superuser=True)
+        self.p = Personnel.objects.create(name="Juan", municipality="Tayabas City")
+
+    def _client(self, user=None):
+        c = APIClient()
+        if user:
+            c.force_authenticate(user=user)
+        return c
+
+    def test_unauthenticated_blocked(self):
+        self.assertEqual(self._client().get("/api/personnel/").status_code, 403)
+
+    def test_staff_blocked_on_every_route(self):
+        c = self._client(self.staff)
+        pk = self.p.pk
+        self.assertEqual(c.get("/api/personnel/").status_code, 403)
+        self.assertEqual(c.post("/api/personnel/", {"name": "N", "municipality": "Lucban"}).status_code, 403)
+        self.assertEqual(c.get(f"/api/personnel/{pk}/").status_code, 403)
+        self.assertEqual(c.patch(f"/api/personnel/{pk}/", {"name": "X"}).status_code, 403)
+        self.assertEqual(c.delete(f"/api/personnel/{pk}/").status_code, 403)
+        self.assertEqual(c.post(f"/api/personnel/{pk}/restore/").status_code, 403)
+        self.assertEqual(c.delete(f"/api/personnel/{pk}/permanent-delete/").status_code, 403)
+        self.assertEqual(
+            c.patch(f"/api/personnel/{pk}/training-record/BLS/", {"year_attained": 2020}).status_code,
+            403,
+        )
+
+    def test_admin_allowed_on_crud_routes(self):
+        c = self._client(self.admin)
+        self.assertEqual(c.get("/api/personnel/").status_code, 200)
+        created = c.post("/api/personnel/", {"name": "New", "municipality": "Lucban"})
+        self.assertEqual(created.status_code, 201)
+        pk = created.json()["id"]
+        self.assertEqual(c.get(f"/api/personnel/{pk}/").status_code, 200)
+        self.assertEqual(c.patch(f"/api/personnel/{pk}/", {"designation": "Lead"}).status_code, 200)
+        self.assertEqual(
+            c.patch(f"/api/personnel/{pk}/training-record/BLS/", {"year_attained": 2020}).status_code,
+            200,
+        )
+
+    def test_permanent_delete_requires_flag(self):
+        # archive first so the 409-precondition doesn't mask the permission check
+        for u in (self.admin, self.admin_del):
+            person = Personnel.objects.create(name="T", municipality="Lucban", is_archived=True)
+            code = self._client(u).delete(f"/api/personnel/{person.pk}/permanent-delete/").status_code
+            self.assertEqual(code, 403 if u is self.admin else 204)
+
+    def test_superuser_is_admin_and_can_permanently_delete(self):
+        c = self._client(self.superuser)
+        self.assertEqual(c.get("/api/personnel/").status_code, 200)
+        person = Personnel.objects.create(name="T", municipality="Lucban", is_archived=True)
+        self.assertEqual(c.delete(f"/api/personnel/{person.pk}/permanent-delete/").status_code, 204)
+
+
+class PersonnelArchiveLifecycleTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("admin", role=Role.ADMIN)
+        self.admin_del = make_user("admindel", role=Role.ADMIN, can_delete=True)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        self.p = Personnel.objects.create(name="Juan", municipality="Tayabas City")
+
+    def test_delete_soft_archives_with_audit_stamp(self):
+        resp = self.c.delete(f"/api/personnel/{self.p.pk}/")
+        self.assertEqual(resp.status_code, 200)
+        self.p.refresh_from_db()
+        self.assertTrue(self.p.is_archived)
+        self.assertIsNotNone(self.p.archived_at)
+        self.assertEqual(self.p.archived_by, self.admin)
+        self.assertEqual(resp.json()["archived_by"], "admin")  # username string
+        self.assertTrue(Personnel.objects.filter(pk=self.p.pk).exists())  # row still there
+
+    def test_archive_is_idempotent(self):
+        self.c.delete(f"/api/personnel/{self.p.pk}/")
+        self.p.refresh_from_db()
+        first_stamp = self.p.archived_at
+        resp = self.c.delete(f"/api/personnel/{self.p.pk}/")
+        self.assertEqual(resp.status_code, 200)
+        self.p.refresh_from_db()
+        self.assertEqual(self.p.archived_at, first_stamp)  # unchanged, not re-stamped
+
+    def test_restore_clears_archive_state(self):
+        self.c.delete(f"/api/personnel/{self.p.pk}/")
+        resp = self.c.post(f"/api/personnel/{self.p.pk}/restore/")
+        self.assertEqual(resp.status_code, 200)
+        self.p.refresh_from_db()
+        self.assertFalse(self.p.is_archived)
+        self.assertIsNone(self.p.archived_at)
+        self.assertIsNone(self.p.archived_by)
+
+    def test_restore_is_idempotent_on_active_record(self):
+        resp = self.c.post(f"/api/personnel/{self.p.pk}/restore/")
+        self.assertEqual(resp.status_code, 200)
+        self.p.refresh_from_db()
+        self.assertFalse(self.p.is_archived)
+
+    def test_permanent_delete_blocked_unless_archived(self):
+        c = APIClient()
+        c.force_authenticate(user=self.admin_del)
+        resp = c.delete(f"/api/personnel/{self.p.pk}/permanent-delete/")
+        self.assertEqual(resp.status_code, 409)
+        self.assertTrue(Personnel.objects.filter(pk=self.p.pk).exists())
+
+    def test_permanent_delete_removes_row_and_cascades_records(self):
+        TrainingRecord.objects.create(personnel=self.p, training_key="BLS", year_attained=2020)
+        self.c.delete(f"/api/personnel/{self.p.pk}/")  # archive
+        c = APIClient()
+        c.force_authenticate(user=self.admin_del)
+        resp = c.delete(f"/api/personnel/{self.p.pk}/permanent-delete/")
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(Personnel.objects.filter(pk=self.p.pk).exists())
+        self.assertEqual(TrainingRecord.objects.count(), 0)
+
+    def test_archived_record_is_read_only_except_restore(self):
+        self.c.delete(f"/api/personnel/{self.p.pk}/")
+        self.assertEqual(
+            self.c.patch(f"/api/personnel/{self.p.pk}/", {"designation": "Nope"}).status_code, 409
+        )
+        self.assertEqual(
+            self.c.patch(
+                f"/api/personnel/{self.p.pk}/training-record/BLS/", {"year_attained": 2020}
+            ).status_code,
+            409,
+        )
+        # restore still works
+        self.assertEqual(self.c.post(f"/api/personnel/{self.p.pk}/restore/").status_code, 200)
+
+    def test_write_only_fields_ignored_in_patch_body(self):
+        resp = self.c.patch(
+            f"/api/personnel/{self.p.pk}/",
+            {"is_archived": True, "district": "Fourth District", "archived_by": 999},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.p.refresh_from_db()
+        self.assertFalse(self.p.is_archived)
+        self.assertEqual(resp.json()["district"], reference.FIRST_DISTRICT)  # still computed
+
+
+class TrainingRecordCellTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("admin", role=Role.ADMIN)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        self.p = Personnel.objects.create(name="Juan", municipality="Tayabas City")
+        self.url = f"/api/personnel/{self.p.pk}/training-record/"
+
+    def _patch(self, key, body):
+        # JSON so `year_attained: null` round-trips (multipart can't encode None).
+        return self.c.patch(self.url + key + "/", body, format="json")
+
+    def test_upsert_creates_then_updates_in_place(self):
+        r1 = self._patch("BLS", {"year_attained": 2021})
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r1.json()["training_key"], "BLS")
+        self.assertEqual(r1.json()["year_attained"], 2021)
+        self.assertEqual(self.p.training_records.count(), 1)
+
+        r2 = self._patch("BLS", {"year_attained": 2024})
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.json()["year_attained"], 2024)
+        self.assertEqual(self.p.training_records.count(), 1)  # still one row
+
+    def test_clear_deletes_cell_and_is_idempotent(self):
+        self._patch("BLS", {"year_attained": 2021})
+        r1 = self._patch("BLS", {"year_attained": None})
+        self.assertEqual(r1.status_code, 204)
+        self.assertEqual(self.p.training_records.count(), 0)
+        r2 = self._patch("BLS", {"year_attained": None})  # nothing to clear
+        self.assertEqual(r2.status_code, 204)
+
+    def test_unknown_training_key_is_404(self):
+        self.assertEqual(self._patch("NOPE", {"year_attained": 2021}).status_code, 404)
+
+    def test_year_out_of_range_is_400(self):
+        self.assertEqual(self._patch("BLS", {"year_attained": TRAINING_YEAR_MIN - 1}).status_code, 400)
+        self.assertEqual(self._patch("BLS", {"year_attained": TRAINING_YEAR_MAX + 1}).status_code, 400)
+
+    def test_missing_year_attained_key_is_400(self):
+        self.assertEqual(self._patch("BLS", {}).status_code, 400)
+
+    def test_upsert_falls_back_to_update_on_integrity_race(self):
+        # Simulate a concurrent insert winning the race: the row already exists
+        # and update_or_create raises IntegrityError on its create path.
+        TrainingRecord.objects.create(personnel=self.p, training_key="BLS", year_attained=2019)
+        with patch.object(
+            TrainingRecord.objects, "update_or_create", side_effect=IntegrityError("dup")
+        ):
+            record = PersonnelViewSet._upsert_cell(self.p, "BLS", 2030)
+        record.refresh_from_db()
+        self.assertEqual(record.year_attained, 2030)
+        self.assertEqual(self.p.training_records.count(), 1)
+
+
+class PersonnelListFilterTests(TestCase):
+    def setUp(self):
+        self.c = APIClient()
+        self.c.force_authenticate(user=make_user("admin", role=Role.ADMIN))
+        # Tayabas City + Lucban are First District; Lucena City is Second.
+        self.tayabas = Personnel.objects.create(name="A", municipality="Tayabas City")
+        self.lucban = Personnel.objects.create(name="B", municipality="Lucban")
+        self.lucena = Personnel.objects.create(name="C", municipality="Lucena City")
+        self.archived = Personnel.objects.create(
+            name="D", municipality="Tayabas City", is_archived=True
+        )
+
+    def _names(self, query=""):
+        resp = self.c.get(f"/api/personnel/{query}")
+        self.assertEqual(resp.status_code, 200)
+        return sorted(row["name"] for row in resp.json())
+
+    def test_default_returns_active_only(self):
+        self.assertEqual(self._names(), ["A", "B", "C"])
+
+    def test_archived_true_returns_archived_only(self):
+        self.assertEqual(self._names("?archived=true"), ["D"])
+
+    def test_archived_false_same_as_default(self):
+        self.assertEqual(self._names("?archived=false"), ["A", "B", "C"])
+
+    def test_archived_all_returns_both(self):
+        self.assertEqual(self._names("?archived=all"), ["A", "B", "C", "D"])
+
+    def test_filter_by_municipality(self):
+        self.assertEqual(self._names("?municipality=Tayabas City"), ["A"])
+
+    def test_filter_by_district(self):
+        self.assertEqual(self._names("?district=First District"), ["A", "B"])
+
+    def test_unknown_municipality_returns_empty(self):
+        self.assertEqual(self._names("?municipality=Nowhere"), [])
+
+    def test_unknown_district_returns_empty(self):
+        self.assertEqual(self._names("?district=Fifth District"), [])
+
+    def test_training_records_always_embedded(self):
+        TrainingRecord.objects.create(personnel=self.tayabas, training_key="BLS", year_attained=2020)
+        row = next(r for r in self.c.get("/api/personnel/").json() if r["name"] == "A")
+        self.assertEqual(row["training_records"], [
+            {"training_key": "BLS", "year_attained": 2020, "updated_at": row["training_records"][0]["updated_at"]}
+        ])
+        detail = self.c.get(f"/api/personnel/{self.tayabas.pk}/").json()
+        self.assertEqual(len(detail["training_records"]), 1)

@@ -106,6 +106,11 @@ def district_for(municipality):
     return MUNICIPALITY_DISTRICT[municipality]
 
 
+def municipalities_in(district):
+    """Tuple of municipality names in a district; empty tuple if unknown."""
+    return _DISTRICT_MUNICIPALITIES.get(district, ())
+
+
 def municipalities_by_district_then_name():
     """Ordered [(name, district), ...] — district First->Fourth, then name."""
     rows = []

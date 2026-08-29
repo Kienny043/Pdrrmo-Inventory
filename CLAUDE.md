@@ -101,9 +101,9 @@ Work through these in order, confirming before moving to the next step.
       MANAGERIAL block of 15 then SKILLS block of 12, spec order).
       Wired via `apps.core` in `INSTALLED_APPS` and `path("api/",
       include("apps.core.urls"))`. No models/migrations yet.
-- [~] 3. Personnel & Training Matrix models + backend CRUD (spec
+- [x] **3. Personnel & Training Matrix models + backend CRUD** (spec
       Section 3.3, 4) — front-loaded ahead of the rest of inventory per
-      Section 0's confirmed priority. Split into two parts:
+      Section 0's confirmed priority. Both parts done:
   - [x] **3a. Models + migration** — `Personnel` and `TrainingRecord`
         in `backend/apps/core/models.py` (+ `choices.py` for the shared
         `OrgAffiliation` enum, unused `EmploymentStatus` reference enum,
@@ -114,11 +114,31 @@ Work through these in order, confirming before moving to the next step.
         `CharField` for v1 (spec Section 6 Q#1 still open);
         `TrainingRecord` has `unique_together (personnel, training_key)`.
         No `admin.py` (that's Step 8).
-  - [ ] **3b. Backend CRUD** — the `/api/personnel/…` endpoints from
-        spec Section 4 (list/create with `?municipality=`/`?district=`/
-        `?archived=`, detail, soft-archive DELETE, restore,
-        permanent-delete, `PATCH …/training-record/<training_key>/`
-        cell upsert). Not started.
+  - [x] **3b. Backend CRUD** — `PersonnelViewSet` (DRF `ModelViewSet` +
+        `SimpleRouter`) in `views.py` / `urls.py`, `serializers.py`,
+        `UserProfile` model (`role` STAFF/ADMIN + `can_permanently_delete`)
+        with an auto-create `post_save` signal (`signals.py`, wired in
+        `CoreConfig.ready()`), migration `core/0002_userprofile`.
+        Live routes, all ADMIN-only:
+        - `GET/POST /api/personnel/` — list supports `?municipality=`
+          (exact), `?district=` (via `reference.municipalities_in`),
+          `?archived=` (absent/`false`/`0`/unknown = active, `true`/`1`
+          = archived, `all` = both); unknown municipality/district → `[]`.
+          No pagination. `training_records` always embedded.
+        - `GET/PATCH /api/personnel/<pk>/` — PATCH on an archived row → 409.
+        - `DELETE /api/personnel/<pk>/` — soft-archive (idempotent 200).
+        - `POST /api/personnel/<pk>/restore/` — idempotent 200.
+        - `DELETE /api/personnel/<pk>/permanent-delete/` — needs
+          `can_permanently_delete`; 409 unless already archived; 204.
+        - `PATCH /api/personnel/<pk>/training-record/<training_key>/` —
+          `{year_attained:<int>}` upsert → 200, `{year_attained:null}`
+          clear → 204; bad key → 404; out-of-range year → 400; upsert
+          wrapped in `transaction.atomic()` with an IntegrityError retry.
+        Permission classes in `permissions.py`: `IsAdmin`,
+        `CanPermanentlyDelete` (both treat Django superusers as
+        satisfying the check). `archived_by` serialized as a username
+        string. `config/urls.py` unchanged (Step 2's `apps.core.urls`
+        include already covers it).
 - [ ] 4. Personnel/matrix frontend (spec Section 5, page 1) — test with
       realistic data across a few districts/municipalities before
       moving on
@@ -142,8 +162,9 @@ Work through these in order, confirming before moving to the next step.
 
 ## Current Git State
 
-On branch `main`: `11c8a3c` scaffold, then the Step 2 reference-data
-commit. Remote `origin` is
+On branch `main`: `11c8a3c` scaffold → Step 2 reference-data → Step 3a
+models/migration → Step 3b Personnel CRUD + auth. Steps 1–3 done; Step 4
+(personnel/matrix frontend) is next. Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 

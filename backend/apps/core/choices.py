@@ -11,6 +11,20 @@ later build steps — e.g. Step 5's ``ManualAttendee`` — can reuse
 from django.db import models
 
 
+class Role(models.TextChoices):
+    """The two-role auth model (spec Section 5).
+
+    STAFF is the floor (request equipment, manage own training registrations);
+    ADMIN manages everything else, including the whole personnel matrix. A
+    separate ``UserProfile.can_permanently_delete`` boolean gates permanent
+    deletion on top of ADMIN. Django superusers are treated as ADMIN +
+    can-permanently-delete by the permission classes.
+    """
+
+    STAFF = "STAFF", "Staff"
+    ADMIN = "ADMIN", "Admin"
+
+
 class OrgAffiliation(models.TextChoices):
     """C/MDRRMO Employee vs. Volunteer (spec Section 2.5 / 3.3).
 

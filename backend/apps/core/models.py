@@ -13,7 +13,7 @@ from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
-from .choices import TRAINING_YEAR_MAX, TRAINING_YEAR_MIN, OrgAffiliation
+from .choices import TRAINING_YEAR_MAX, TRAINING_YEAR_MIN, OrgAffiliation, Role
 from .reference import (
     MUNICIPALITY_CHOICES,
     MUNICIPALITY_NAME_MAX_LENGTH,
@@ -21,6 +21,40 @@ from .reference import (
     TRAINING_KEY_MAX_LENGTH,
     district_for,
 )
+
+
+class UserProfile(models.Model):
+    """Per-user role + elevated-delete flag (spec Section 5).
+
+    Auto-created for every ``User`` by a ``post_save`` signal (see
+    ``signals.py``). ``profile_for()`` below is the safe accessor for code
+    paths that may hit a user created before the signal existed.
+
+    v1 has no self-service registration or role-management UI — profiles are
+    edited via ``createsuperuser`` + shell/admin. Step 11 replaces this with
+    JWT claims from PDRRMO_v3.
+    """
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="profile",
+    )
+    role = models.CharField(max_length=16, choices=Role.choices, default=Role.STAFF)
+    can_permanently_delete = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"{self.user} ({self.role})"
+
+    @property
+    def is_admin(self):
+        return self.role == Role.ADMIN
+
+
+def profile_for(user):
+    """Return the user's profile, creating a default (STAFF) one if missing."""
+    profile, _created = UserProfile.objects.get_or_create(user=user)
+    return profile
 
 
 class Personnel(models.Model):
