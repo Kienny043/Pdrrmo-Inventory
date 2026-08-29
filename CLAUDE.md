@@ -172,11 +172,27 @@ Work through these in order, confirming before moving to the next step.
         — `rowspan="2"` identity `<th>`s + `position: sticky` collapsed
         the MANAGERIAL/SKILLS band row in Chrome; header rebuilt as two
         full rows, no rowspan.
-- [ ] 5. Remaining core models + migrations (spec Section 3.1, 3.2),
-      applying all of Section 2's decisions as they're built (atomic
-      stock movements, real `is_archived` on `TrainingSchedule`,
-      soft-cancel registrations, shared `OrgAffiliation`, etc.) rather
-      than retrofitting afterward
+- [~] 5. Remaining core models + migrations (spec Section 3.1, 3.2),
+      applying Section 2's decisions as they're built. Split into two:
+  - [x] **5a. Inventory core (§3.1)** — `Category`, `Staff`,
+        `InventoryItem`, `ItemHolderLog`, `StockMovement`,
+        `InventoryRequest` appended to `apps/core/models.py`, migration
+        `core/0003`. Nested `TextChoices` per model (`Staff.Status`,
+        `InventoryItem.Condition`, `ItemHolderLog.Action`,
+        `StockMovement.MovementType`, `InventoryRequest.Status`). Applied:
+        2.10 (no `Category.icon`), 2.11 (free-text `unit`), 2.3 (full
+        `is_archived`/`archived_at`/`archived_by` triple on Staff + Item,
+        not just the bare bool), 2.12 (`InventoryRequest.decided_by`/
+        `decided_at`). `Staff.photo` + `InventoryItem.image` are
+        `ImageField` → **Pillow** added to `requirements.txt`. The atomic
+        stock logic (2.1/2.12) and `ItemHolderLog` auto-write are
+        deferred to Step 6 (CRUD); no serializers/views/admin yet.
+  - [ ] **5b. Training events (§3.2)** — `TrainingSchedule` (real
+        `is_archived` per 2.3, `matrix_training_key` catalog choice per
+        2.4), `TrainingRegistration` (soft-cancel `status`/`cancelled_at`
+        per 2.6, no `unique_together`), `ManualAttendee` (shared
+        `OrgAffiliation`, `municipality` choice not FK, per 2.5/§1.1).
+        Not started.
 - [ ] 6. Backend CRUD for the rest of inventory (spec Section 4)
 - [ ] 7. Remaining frontend pages (spec Section 5, pages 2–8)
 - [ ] 8. Full `admin.py` registration for every model (spec 2.9) —
@@ -192,10 +208,10 @@ Work through these in order, confirming before moving to the next step.
 
 ## Current Git State
 
-On branch `main`: `11c8a3c` scaffold → Step 2 reference-data → Step 3a
-models/migration → Step 3b Personnel CRUD + auth → Step 4 personnel/matrix
-frontend. Steps 1–4 done; Step 5 (remaining core models, spec 3.1/3.2) is
-next. Remote `origin` is
+On branch `main`: `11c8a3c` scaffold → Step 2 reference-data → Step 3a/3b
+Personnel models + CRUD + auth → Step 4 personnel/matrix frontend → Step 5a
+inventory-core models (`core/0003`). Steps 1–4 + 5a done; Step 5b
+(training-event models, spec §3.2) is next. Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 

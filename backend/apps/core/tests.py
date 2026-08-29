@@ -7,11 +7,23 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from . import reference
 from .choices import TRAINING_YEAR_MAX, TRAINING_YEAR_MIN, OrgAffiliation, Role
-from .models import Personnel, TrainingRecord, UserProfile, profile_for
+from .models import (
+    Category,
+    InventoryItem,
+    InventoryRequest,
+    ItemHolderLog,
+    Personnel,
+    Staff,
+    StockMovement,
+    TrainingRecord,
+    UserProfile,
+    profile_for,
+)
 from .views import PersonnelViewSet
 
 
@@ -471,3 +483,193 @@ class PersonnelListFilterTests(TestCase):
         ])
         detail = self.c.get(f"/api/personnel/{self.tayabas.pk}/").json()
         self.assertEqual(len(detail["training_records"]), 1)
+
+
+# --------------------------------------------------------------------------
+# Step 5a — Inventory core models (spec Section 3.1)
+# --------------------------------------------------------------------------
+
+
+class InventoryCoreModelTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("invtester", password="pw")
+        self.cat = Category.objects.create(name="Radios", description="Comms gear")
+        self.staff = Staff.objects.create(first_name="Ana", last_name="Cruz")
+        self.item = InventoryItem.objects.create(
+            category=self.cat, name="Handheld VHF", quantity=5, unit="unit"
+        )
+
+    # --- Category ---
+
+    def test_category_defaults_and_str(self):
+        self.assertEqual(str(self.cat), "Radios")
+        self.assertIsNotNone(self.cat.created_at)
+        self.assertIsNotNone(self.cat.updated_at)
+
+    def test_category_name_unique(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Category.objects.create(name="Radios")
+
+    def test_category_has_no_icon_field(self):
+        self.assertFalse(any(f.name == "icon" for f in Category._meta.get_fields()))
+
+    # --- Staff ---
+
+    def test_staff_full_name_and_defaults(self):
+        self.assertEqual(self.staff.full_name, "Ana Cruz")
+        self.assertEqual(str(self.staff), "Ana Cruz")
+        self.assertEqual(self.staff.status, Staff.Status.PERMANENT)
+        self.assertFalse(self.staff.is_archived)
+        self.assertIsNone(self.staff.archived_at)
+        self.assertIsNone(self.staff.archived_by)
+
+    def test_staff_status_choice_validation(self):
+        self.staff.status = "BOGUS"
+        with self.assertRaises(ValidationError):
+            self.staff.full_clean()
+
+    def test_staff_archive_triple(self):
+        # 2.3: full is_archived + archived_at + archived_by, like Personnel
+        for name in ("is_archived", "archived_at", "archived_by"):
+            self.assertTrue(any(f.name == name for f in Staff._meta.get_fields()), name)
+        now = timezone.now()
+        self.staff.is_archived = True
+        self.staff.archived_at = now
+        self.staff.archived_by = self.user
+        self.staff.save()
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_archived)
+        self.assertEqual(self.staff.archived_by, self.user)
+
+    def test_staff_photo_is_imagefield_optional(self):
+        from django.db.models import ImageField
+
+        field = Staff._meta.get_field("photo")
+        self.assertIsInstance(field, ImageField)
+        self.assertTrue(field.null and field.blank)
+
+    # --- InventoryItem ---
+
+    def test_item_defaults_and_fk(self):
+        self.assertEqual(self.item.category, self.cat)
+        self.assertEqual(self.item.quantity, 5)
+        self.assertEqual(self.item.condition, InventoryItem.Condition.GOOD)
+        self.assertIsNone(self.item.memorandum_receipt)
+        self.assertIn(self.item, self.cat.items.all())
+
+    def test_item_condition_choice_validation(self):
+        self.item.condition = "MELTED"
+        with self.assertRaises(ValidationError):
+            self.item.full_clean()
+
+    def test_item_unit_is_free_text(self):
+        self.item.unit = "whatever-crate"
+        self.item.full_clean()  # no raise — 2.11
+
+    def test_item_quantity_rejects_negative(self):
+        self.item.quantity = -1
+        with self.assertRaises(ValidationError):
+            self.item.full_clean()
+
+    def test_item_memorandum_receipt_set_null_on_staff_delete(self):
+        self.item.memorandum_receipt = self.staff
+        self.item.save()
+        self.assertIn(self.item, self.staff.held_items.all())
+        self.staff.delete()
+        self.item.refresh_from_db()
+        self.assertIsNone(self.item.memorandum_receipt)
+
+    def test_item_archive_triple(self):
+        for name in ("is_archived", "archived_at", "archived_by"):
+            self.assertTrue(any(f.name == name for f in InventoryItem._meta.get_fields()), name)
+
+    def test_category_delete_cascades_items(self):
+        self.assertEqual(InventoryItem.objects.count(), 1)
+        self.cat.delete()
+        self.assertEqual(InventoryItem.objects.count(), 0)
+
+    # --- ItemHolderLog ---
+
+    def test_holder_log_relationships_and_action(self):
+        log = ItemHolderLog.objects.create(
+            item=self.item, staff=self.staff, action=ItemHolderLog.Action.ASSIGNED,
+            performed_by=self.user, note="initial issue",
+        )
+        self.assertIn(log, self.item.holder_logs.all())
+        self.assertIsNotNone(log.timestamp)
+        log.action = "TELEPORTED"
+        with self.assertRaises(ValidationError):
+            log.full_clean()
+
+    def test_holder_log_cascades_on_item_delete(self):
+        ItemHolderLog.objects.create(item=self.item, action=ItemHolderLog.Action.ASSIGNED)
+        self.item.delete()
+        self.assertEqual(ItemHolderLog.objects.count(), 0)
+
+    def test_holder_log_performed_by_set_null_on_user_delete(self):
+        log = ItemHolderLog.objects.create(
+            item=self.item, action=ItemHolderLog.Action.REMOVED, performed_by=self.user
+        )
+        self.user.delete()
+        log.refresh_from_db()
+        self.assertIsNone(log.performed_by)
+
+    # --- StockMovement ---
+
+    def test_stock_movement_fields(self):
+        mv = StockMovement.objects.create(
+            item=self.item, quantity=3, movement_type=StockMovement.MovementType.IN,
+            performed_by=self.user,
+        )
+        self.assertIn(mv, self.item.movements.all())
+        self.assertIsNotNone(mv.created_at)
+
+    def test_stock_movement_type_validation_and_positive_quantity(self):
+        mv = StockMovement(item=self.item, quantity=1, movement_type="SIDEWAYS")
+        with self.assertRaises(ValidationError):
+            mv.full_clean()
+        mv2 = StockMovement(item=self.item, quantity=-2, movement_type=StockMovement.MovementType.OUT)
+        with self.assertRaises(ValidationError):
+            mv2.full_clean()
+
+    def test_stock_movement_cascades_on_item_delete(self):
+        StockMovement.objects.create(
+            item=self.item, quantity=1, movement_type=StockMovement.MovementType.IN
+        )
+        self.item.delete()
+        self.assertEqual(StockMovement.objects.count(), 0)
+
+    # --- InventoryRequest ---
+
+    def test_request_defaults_and_relationships(self):
+        req = InventoryRequest.objects.create(
+            requested_by=self.user, item=self.item, quantity=2
+        )
+        self.assertEqual(req.status, InventoryRequest.Status.PENDING)
+        self.assertIsNone(req.decided_by)
+        self.assertIsNone(req.decided_at)
+        self.assertIn(req, self.user.inventory_requests.all())
+        self.assertIn(req, self.item.requests.all())
+
+    def test_request_status_validation(self):
+        req = InventoryRequest(requested_by=self.user, item=self.item, quantity=1, status="MAYBE")
+        with self.assertRaises(ValidationError):
+            req.full_clean()
+
+    def test_request_cascades_on_requester_delete(self):
+        InventoryRequest.objects.create(requested_by=self.user, item=self.item, quantity=1)
+        self.user.delete()
+        self.assertEqual(InventoryRequest.objects.count(), 0)
+
+    def test_request_decided_by_set_null_on_user_delete(self):
+        decider = User.objects.create_user("decider", password="pw")
+        req = InventoryRequest.objects.create(
+            requested_by=self.user, item=self.item, quantity=1,
+            status=InventoryRequest.Status.APPROVED, decided_by=decider,
+            decided_at=timezone.now(),
+        )
+        decider.delete()
+        req.refresh_from_db()
+        self.assertIsNone(req.decided_by)
+        self.assertIsNotNone(req.decided_at)
