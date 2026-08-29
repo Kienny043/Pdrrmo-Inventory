@@ -372,9 +372,33 @@ Work through these in order, confirming before moving to the next step.
           placeholder` still asserted `/equipment/` shows the
           coming-soon page — outdated since 7b made it real (the 7b
           suite run missed it). Now checks `/trainings/` + `/archived/`.
-  - [ ] **7d. Training schedules** (page 6) — list + create/edit +
-        archive + expandable per-schedule panel (roster + attendance
-        toggle w/ matrix-bridge feedback + manual attendees). Not started.
+  - [x] **7d. Training schedules** (page 6). `/trainings/`,
+        `trainings.js` + `trainings.css`. No migration.
+        - List (both roles): title/dates/venue/status/matrix-label/slots/
+          deadline/reg-count. Per-row **Register/Cancel** — if a
+          client-side blocker applies the button is disabled with the
+          specific reason (`training is archived` / `registration closed
+          (<status>)` / `registration deadline passed` / `training is
+          full` / `you are already registered`); a server 409 also
+          surfaces its `detail`.
+        - ADMIN: `+ New Training` + `View: Active/Archived`. Create/edit
+          **modal** with a `matrix_training_key` `<select>` split into
+          `<optgroup>` MANAGERIAL/SKILLS from `GET /api/training-catalog/`.
+          Per-row **Details** (expand) / Edit / Archive; archived view:
+          Restore + Delete (permanent-delete, gated on
+          `can_permanently_delete`, 409-unless-archived).
+        - **Expandable panel** (ADMIN): Registrations sub-table with an
+          attendance checkbox per registrant → `PATCH
+          …/attendance/<user_id>/`; the response's `matrix_updated`
+          drives an inline note — "✓ matrix updated" / "matrix not
+          updated — <reason>" / "attendance cleared" on uncheck. Manual
+          attendees sub-table (list + add form w/ municipality `<select>`
+          + org-affiliation + delete + attendance checkbox), prefaced by
+          a static note that manual attendees do **not** feed the matrix.
+        - `TrainingRegistrationSerializer` gained a read-only `user_id`
+          (`PrimaryKeyRelatedField(source="user")`) — the roster returns
+          `user` as a username, but the attendance route keys on the
+          numeric id.
   - [ ] **7e. Archived** (page 7) — tabbed Items/Staff/Trainings/
         Personnel, restore + conditional permanent-delete. Not started.
 - [ ] 8. Full `admin.py` registration for every model (spec 2.9) —
@@ -397,8 +421,8 @@ events) → Step 6 full inventory CRUD (6a catalog/custody, 6b stock
 integrity `services.py`, 6c training events + `attendance→TrainingRecord`
 bridge, `core/0005` `Personnel.user`) → Step 7a shared frontend infra +
 Categories/Staff pages → Step 7b Equipment + Stock movements pages. Steps
-1–6 + 7a–7c done; Step 7d (Training schedules page) is next. Remote
-`origin` is
+1–6 + 7a–7d done; Step 7e (Archived tabbed page) is the last of Step 7.
+Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 

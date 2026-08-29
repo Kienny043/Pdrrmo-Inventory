@@ -1,0 +1,24 @@
+/* Training-schedules page only. Shared styles live in common.css. */
+
+#grid td.actions button { margin: 0 .1rem .1rem 0; }
+
+tr.panel-row > td {
+  background: #f5f7fa;
+  border-top: 2px solid var(--line);
+}
+.panel { padding: .5rem .25rem; display: grid; gap: 1rem; }
+.panel h3 { margin: 0 0 .35rem; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #555; }
+.panel .sub-table { border-collapse: collapse; width: 100%; }
+.panel .sub-table th, .panel .sub-table td { border: 1px solid var(--line); padding: .25rem .45rem; text-align: left; }
+.panel .sub-table thead th { background: #eef1f4; }
+
+.attend-note { font-size: 12px; margin-left: .5rem; }
+.attend-note.ok { color: var(--ok); }
+.attend-note.warn { color: #9a6a00; }
+
+.ma-add { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .4rem; }
+.ma-add input, .ma-add select { font: inherit; padding: .25rem; }
+
+.manual-note { font-size: 12px; color: #666; margin: .2rem 0 0; }
+
+.reg-hint { font-size: 12px; color: #9a6a00; margin-left: .35rem; }

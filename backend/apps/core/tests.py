@@ -1726,12 +1726,10 @@ class Step7aPageShellTests(TestCase):
         self.assertRedirects(sc.get("/"), "/equipment/", fetch_redirect_response=False)
 
     def test_not_yet_built_pages_render_placeholder(self):
-        # Routes still wired to coming_soon_page. Shrinks as 7d/7e land:
-        # /trainings/ -> 7d, /archived/ -> 7e.
-        for url in ("/trainings/", "/archived/"):
-            r = self._get(self.admin, url)
-            self.assertEqual(r.status_code, 200, url)
-            self.assertContains(r, "built in a later Step 7 sub-step")
+        # Routes still wired to coming_soon_page. /archived/ -> 7e is the last.
+        r = self._get(self.admin, "/archived/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "built in a later Step 7 sub-step")
 
     def test_context_processor_flags(self):
         from apps.core.context_processors import role
@@ -1828,3 +1826,50 @@ class Step7cRequestsPageShellTests(TestCase):
         for client in (self.ac, self.sc):
             nav = client.get("/requests/").content.decode().split("<nav>", 1)[1].split("</nav>", 1)[0]
             self.assertIn('href="/requests/"', nav)
+
+
+# --------------------------------------------------------------------------
+# Step 7d — Training schedules page shell + user_id on the roster serializer
+# --------------------------------------------------------------------------
+
+
+class Step7dTrainingsPageShellTests(TestCase):
+    def setUp(self):
+        from django.test import Client
+
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.staff = make_user("s", role=Role.STAFF)
+        self.ac = Client(); self.ac.force_login(self.admin)
+        self.sc = Client(); self.sc.force_login(self.staff)
+
+    def test_admin_shell_has_admin_controls(self):
+        r = self.ac.get("/trainings/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'data-is-admin="1"')
+        self.assertContains(r, 'id="btn-add"')
+        self.assertContains(r, 'id="tpl-training-form"')
+        self.assertContains(r, 'id="tpl-manual-form"')
+
+    def test_staff_shell_read_only(self):
+        r = self.sc.get("/trainings/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'data-is-admin="0"')
+        self.assertNotContains(r, 'id="btn-add"')
+        self.assertNotContains(r, 'id="tpl-training-form"')
+        self.assertContains(r, 'id="grid"')  # still gets the list
+
+    def test_nav_link_resolves_for_both_roles(self):
+        for client in (self.ac, self.sc):
+            nav = client.get("/trainings/").content.decode().split("<nav>", 1)[1].split("</nav>", 1)[0]
+            self.assertIn('href="/trainings/"', nav)
+
+    def test_roster_serializer_exposes_user_id(self):
+        import datetime
+
+        t = TrainingSchedule.objects.create(title="X", date_start=datetime.date(2026, 6, 1))
+        TrainingRegistration.objects.create(training=t, user=self.staff)
+        c = APIClient()
+        c.force_authenticate(user=self.admin)
+        row = c.get(f"/api/trainings/{t.pk}/registrations/").json()[0]
+        self.assertEqual(row["user_id"], self.staff.pk)
+        self.assertEqual(row["user"], "s")

@@ -153,6 +153,19 @@ def requests_page(request):
     return render(request, "core/requests.html")
 
 
+@login_required
+@ensure_csrf_cookie
+def trainings_page(request):
+    """Shell for the Training schedules page (spec Section 5, page 6).
+
+    STAFF see active schedules + can register/cancel; ADMIN also get
+    create/edit/archive, the roster + attendance panel, and manual
+    attendees. Everything gates on the context processor's is_admin /
+    can_permanently_delete.
+    """
+    return render(request, "core/trainings.html")
+
+
 class PersonnelViewSet(viewsets.ModelViewSet):
     """CRUD + archive lifecycle + matrix-cell upsert for Personnel (spec Section 4).
 

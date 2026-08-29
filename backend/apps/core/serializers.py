@@ -333,6 +333,7 @@ class TrainingScheduleSerializer(serializers.ModelSerializer):
 
 class TrainingRegistrationSerializer(serializers.ModelSerializer):
     user = serializers.SlugRelatedField(slug_field="username", read_only=True)
+    user_id = serializers.PrimaryKeyRelatedField(source="user", read_only=True)
     training_title = serializers.CharField(source="training.title", read_only=True)
 
     class Meta:
@@ -342,6 +343,7 @@ class TrainingRegistrationSerializer(serializers.ModelSerializer):
             "training",
             "training_title",
             "user",
+            "user_id",
             "status",
             "registered_at",
             "cancelled_at",
