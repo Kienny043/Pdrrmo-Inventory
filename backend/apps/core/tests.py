@@ -1913,3 +1913,93 @@ class Step7eArchivedPageShellTests(TestCase):
     def test_nav_link_resolves(self):
         nav = self.ac.get("/archived/").content.decode().split("<nav>", 1)[1].split("</nav>", 1)[0]
         self.assertIn('href="/archived/"', nav)
+
+
+# --------------------------------------------------------------------------
+# Step 8 — Django admin registration for every model (spec 2.9)
+# --------------------------------------------------------------------------
+
+
+class Step8AdminTests(TestCase):
+    ADMIN_MODELS = [
+        Category, Staff, InventoryItem, ItemHolderLog, StockMovement,
+        InventoryRequest, TrainingSchedule, TrainingRegistration,
+        ManualAttendee, Personnel, TrainingRecord, UserProfile,
+    ]
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.root = User.objects.create_superuser("root8", "", "pw")
+        cls.cat = Category.objects.create(name="Radios")
+        cls.staff = Staff.objects.create(first_name="Ана", last_name="Cruz", position="Tech")
+        cls.item = InventoryItem.objects.create(category=cls.cat, name="Handheld VHF", quantity=5)
+        StockMovement.objects.create(item=cls.item, quantity=5, movement_type=StockMovement.MovementType.IN)
+        ItemHolderLog.objects.create(item=cls.item, action=ItemHolderLog.Action.ASSIGNED)
+        cls.req = InventoryRequest.objects.create(
+            requested_by=cls.root, item=cls.item, quantity=1
+        )
+        cls.training = TrainingSchedule.objects.create(
+            title="ICS L1", date_start=datetime.date(2026, 1, 5)
+        )
+        cls.reg = TrainingRegistration.objects.create(training=cls.training, user=cls.root)
+        cls.manual = ManualAttendee.objects.create(
+            training=cls.training, name="Ben Reyes", municipality="Lucban"
+        )
+        cls.person = Personnel.objects.create(name="Rita Yu", municipality="Lucban")
+        cls.rec = TrainingRecord.objects.create(
+            personnel=cls.person, training_key="ICS_L1", year_attained=2024
+        )
+        cls.profile = cls.root.profile
+
+    def setUp(self):
+        from django.test import Client
+
+        self.c = Client()
+        self.c.force_login(self.root)
+
+    def test_all_twelve_models_registered(self):
+        from django.contrib import admin as dj_admin
+
+        registered = set(dj_admin.site._registry)
+        for model in self.ADMIN_MODELS:
+            self.assertIn(model, registered, f"{model.__name__} not registered in admin")
+
+    def test_changelist_pages_load_for_all_models(self):
+        for model in self.ADMIN_MODELS:
+            url = f"/admin/core/{model._meta.model_name}/"
+            self.assertEqual(self.c.get(url).status_code, 200, url)
+
+    def test_view_only_admins_forbid_add(self):
+        for model in (StockMovement, ItemHolderLog):
+            url = f"/admin/core/{model._meta.model_name}/add/"
+            self.assertEqual(self.c.get(url).status_code, 403, url)
+
+    def test_change_pages_with_inlines_load(self):
+        pairs = [
+            (Personnel, self.person.pk),
+            (InventoryItem, self.item.pk),
+            (TrainingSchedule, self.training.pk),
+            (Category, self.cat.pk),
+            (InventoryRequest, self.req.pk),
+            (TrainingRegistration, self.reg.pk),
+        ]
+        for model, pk in pairs:
+            url = f"/admin/core/{model._meta.model_name}/{pk}/change/"
+            self.assertEqual(self.c.get(url).status_code, 200, url)
+
+    def test_add_pages_load_for_editable_models(self):
+        for model in (Category, Staff, InventoryItem, TrainingSchedule, Personnel, TrainingRecord, UserProfile):
+            url = f"/admin/core/{model._meta.model_name}/add/"
+            self.assertEqual(self.c.get(url).status_code, 200, url)
+
+    def test_inventoryitem_quantity_readonly_on_change_only(self):
+        from django.contrib import admin as dj_admin
+
+        ma = dj_admin.site._registry[InventoryItem]
+        self.assertNotIn("quantity", ma.get_readonly_fields(None, obj=None))
+        self.assertIn("quantity", ma.get_readonly_fields(None, obj=self.item))
+
+    def test_user_change_page_shows_profile_inline(self):
+        r = self.c.get(f"/admin/auth/user/{self.root.pk}/change/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "can_permanently_delete")

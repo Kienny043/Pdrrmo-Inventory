@@ -81,18 +81,20 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **opts):
         User = get_user_model()
-        admin, created = User.objects.get_or_create(
-            username="admin", defaults={"is_staff": True}
-        )
+        admin, created = User.objects.get_or_create(username="admin")
         if created:
             admin.set_password("admin")
-            admin.save(update_fields=["password"])
+        # Superuser so /admin/ is actually usable by the dev login (and so the
+        # API's "superusers satisfy every check" path is exercised too).
+        admin.is_staff = True
+        admin.is_superuser = True
+        admin.save()
         prof = profile_for(admin)
         prof.role = Role.ADMIN
         prof.can_permanently_delete = True
         prof.save()
         self.stdout.write(
-            "admin user %s (login admin/admin), role=ADMIN, can_permanently_delete=True"
+            "admin user %s (login admin/admin), superuser, role=ADMIN, can_permanently_delete=True"
             % ("created" if created else "exists")
         )
 

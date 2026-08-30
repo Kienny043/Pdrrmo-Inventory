@@ -416,8 +416,39 @@ Work through these in order, confirming before moving to the next step.
         view + `coming_soon.html` + the stale placeholder test, replaced
         by `test_every_nav_route_resolves_to_a_real_page` (all 8 nav
         routes are real pages). **Step 7 complete.**
-- [ ] 8. Full `admin.py` registration for every model (spec 2.9) —
-      cheap, do it once at the end rather than piecemeal
+- [x] **8. Full `admin.py` registration for every model** (spec 2.9) —
+      `apps/core/admin.py` (new; no migration) registers all 12 models.
+      Fields set only by the API's atomic/lifecycle paths are read-only
+      in the admin so it can't break an invariant or falsify an audit
+      trail: the archive triple (`is_archived`/`archived_at`/
+      `archived_by`) on Staff/Item/TrainingSchedule/Personnel; audit FKs
+      (`performed_by`/`decided_by`/`archived_by`/`created_by`); all
+      timestamps; `InventoryRequest.status`/`decided_by`/`decided_at`;
+      `TrainingRegistration.status`/`attended`/`registered_at`/
+      `cancelled_at`; `InventoryItem.quantity` read-only **on change
+      only** (editable on add) via `get_readonly_fields`;
+      `Personnel.district` (a property). `StockMovement` and
+      `ItemHolderLog` are **wholly view-only** (add/change/delete all
+      denied) — a manual edit would bypass
+      `services.apply_stock_movement`. `TrainingRecord` stays editable
+      except `updated_at` (year corrections are a legit support case).
+      **`Personnel.user` is editable via `autocomplete_fields`** — the
+      admin is the account-linking UI, closing the 6c/7d gap (the API
+      still has no linking endpoint). Inlines: Category→InventoryItem
+      (view-only), InventoryItem→StockMovement+ItemHolderLog (view-only),
+      TrainingSchedule→TrainingRegistration (status/attendance read-only)
+      +ManualAttendee (editable), Personnel→TrainingRecord (editable).
+      `UserProfile` fully editable (role / `can_permanently_delete`), and
+      a custom `UserAdmin` (unregister + re-register `User`) carries a
+      `UserProfileInline` so role is settable from the user page + a
+      `core_role` changelist column. `seed_personnel.py` now makes the
+      seeded `admin` user `is_staff`+`is_superuser` (set unconditionally
+      each run) so `/admin/` is usable by the dev login. `Step8AdminTests`
+      (7 tests): all 12 in `admin.site._registry`; all 12 changelists →
+      200; view-only admins forbid add (403); change pages with inlines
+      load; add pages load for editable models; the quantity
+      readonly-on-change-only rule; the User page renders the profile
+      inline.
 - [ ] 9. Test end-to-end: personnel matrix across districts, equipment
       request → approval → stock deduction, training schedule →
       attendance → matrix auto-populate, archive/restore/
@@ -436,11 +467,15 @@ events) → Step 6 full inventory CRUD (6a catalog/custody, 6b stock
 integrity `services.py`, 6c training events + `attendance→TrainingRecord`
 bridge, `core/0005` `Personnel.user`) → Step 7 all frontend pages
 (7a shared infra + Categories/Staff, 7b Equipment + Stock movements,
-7c Requests, 7d Training schedules, 7e Archived). **Steps 1–7 done**;
-Step 8 (full `admin.py` registration, spec 2.9) is next. Migrations:
-`core/0001`–`core/0005`. Test suite: 181 passing. Remote `origin` is
-`https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
-`origin/main`.
+7c Requests, 7d Training schedules, 7e Archived) → Step 8 full
+`admin.py` (all 12 models, `apps/core/admin.py`, no migration;
+lifecycle/audit fields read-only, StockMovement/ItemHolderLog view-only,
+`Personnel.user` autocomplete linking, custom `UserAdmin` +
+`UserProfileInline`; `seed_personnel` admin user now a superuser).
+**Steps 1–8 done**; Step 9 (end-to-end testing) is next. Migrations:
+`core/0001`–`core/0005` (Step 8 added none). Test suite: 188 passing.
+Remote `origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`;
+`main` tracks `origin/main`.
 
 Backend note — stock integrity (`apps/core/services.py`):
 `apply_stock_movement` is the ONLY path that changes
