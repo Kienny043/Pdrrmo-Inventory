@@ -449,10 +449,51 @@ Work through these in order, confirming before moving to the next step.
       load; add pages load for editable models; the quantity
       readonly-on-change-only rule; the User page renders the profile
       inline.
-- [ ] 9. Test end-to-end: personnel matrix across districts, equipment
-      request → approval → stock deduction, training schedule →
-      attendance → matrix auto-populate, archive/restore/
-      permanent-delete for every archivable model
+- [x] **9. End-to-end testing** — four real-world workflows exercised as
+      one continuous headless-Chromium session each, through the actual
+      UI, against one evolving dev DB (dedicated fixture accounts:
+      `mgarcia` plain non-superuser ADMIN, `rlopez`/`jnavarro`/`baquino`
+      STAFF; `jnavarro`→Personnel *Josie Navarro* / Catanauan,
+      `baquino`→*Dennis Cruz* / Lucena City). **No application code
+      changed** — this step proves existing code holds together. **86/86
+      assertions passed.**
+  - **Chain 1 — personnel matrix across districts (21/21):** browsed
+      First (Tayabas City + Lucban shown together, 7 rows) → Lucban only
+      (3 rows, Municipality column hidden) → Second/Sariaya → Third/
+      Mulanay, editing a training-year cell or identity field in each;
+      archived view showed only the 2 seed-archived rows; edits persisted
+      across in-session navigation *and* a full page reload; row sets
+      stayed disjoint per district (data isolation held).
+  - **Chain 2 — request → approval → stock deduction (18/18):** STAFF
+      `rlopez` submitted a qty-5 request (PENDING, no actions cell);
+      plain-ADMIN `mgarcia` approved it → APPROVED/decided-by; Equipment
+      page then showed 20→15 and Stock movements showed
+      `OUT / 5 / "Request #N approved by mgarcia"`. Negative tail: a
+      qty-999 approve stayed PENDING, showed the inline
+      insufficient-stock error on the row, and left quantity at 15 (no
+      partial deduction). *(One assertion initially failed on the test's
+      own regex — the real message reads "Only N … on hand; M requested."
+      — fixed the assertion only; no app change.)*
+  - **Chain 3 — training → attendance → matrix auto-populate (17/17):**
+      `mgarcia` created a training with `matrix_training_key=RDANA` via
+      the modal; `jnavarro` and `baquino` self-registered; attendance was
+      ticked for **jnavarro only**. On the Personnel matrix page itself:
+      *Josie Navarro's* RDANA cell flipped blank→2026 (POSITIVE), and —
+      **the load-bearing assertion of this whole pass** — *Dennis Cruz's*
+      RDANA cell stayed **blank** (registered but never marked attended;
+      asserted directly as `value === ""`, not inferred from the positive
+      case). Un-ticking jnavarro's attendance ("attendance cleared") left
+      the 2026 TrainingRecord intact (invariant: un-mark never deletes).
+  - **Chain 4 — archive/restore/permanent-delete via the Archived page
+      (30/30):** for Staff, InventoryItem, TrainingSchedule and Personnel
+      (throwaway records), each: archived from its own page → listed in
+      the right Archived-page tab → **Restore** there → back in the
+      active list (`is_archived:false`) → re-archived → **Delete
+      permanently** there → gone, detail endpoint 404. The Personnel tab
+      kept aggregating the 2 seed-archived rows alongside.
+  - Teardown: `seed_personnel --flush` + explicit drop of the fixture
+      users / Category / Item / workflow rows → back to the pristine
+      20 Personnel / 73 TrainingRecords / 2 archived baseline.
 - [ ] 10. Deploy (Render + external Postgres, unless a faster option
        makes more sense at that point)
 - [ ] 11. *(Later, separate effort)* Integration into `PDRRMO_v3`'s
@@ -471,9 +512,13 @@ bridge, `core/0005` `Personnel.user`) → Step 7 all frontend pages
 `admin.py` (all 12 models, `apps/core/admin.py`, no migration;
 lifecycle/audit fields read-only, StockMovement/ItemHolderLog view-only,
 `Personnel.user` autocomplete linking, custom `UserAdmin` +
-`UserProfileInline`; `seed_personnel` admin user now a superuser).
-**Steps 1–8 done**; Step 9 (end-to-end testing) is next. Migrations:
-`core/0001`–`core/0005` (Step 8 added none). Test suite: 188 passing.
+`UserProfileInline`; `seed_personnel` admin user now a superuser) →
+Step 9 end-to-end testing (4 headless-Chromium workflow chains through
+the real UI, 86/86 assertions, **no code changed** — the chain-3
+negative case, Dennis Cruz staying blank after registering-without-
+attending, was the load-bearing assertion). **Steps 1–9 done**; Step 10
+(deploy — Render + external Postgres) is next. Migrations:
+`core/0001`–`core/0005` (Steps 8–9 added none). Test suite: 188 passing.
 Remote `origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`;
 `main` tracks `origin/main`.
 
