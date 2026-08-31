@@ -669,9 +669,45 @@ into `../PDRRMO_v3/`. It is a frozen snapshot, not a living reference.
       reload + inline insufficient-stock error + `?item=` filter;
       Movements STAFF redirects to `/equipment`; no console errors;
       screenshots match the design system.
-- [ ] **R5. Requests + Trainings.** (May split R5a/R5b at build time if
-      Trainings is too big for one chunk — flag before proceeding past
-      the split, same as Steps 5/6/7.)
+- **R5. Requests + Trainings — SPLIT into R5a + R5b.** Requests and
+  Trainings share essentially no surface (different models, different
+  endpoints, opposite UI shapes — Requests is one table + a small form +
+  two row actions; Trainings is a catalog-grouped modal + an expandable
+  roster panel + matrix-bridge feedback + a manual-attendee sub-table +
+  the full archive/restore/permanent-delete lifecycle + 5 distinct
+  register blockers). Verifying them together buys nothing, and
+  Trainings alone is the app's biggest page — it got its own dedicated
+  cycle as Step 7d in the template rebuild, same reasoning here.
+  - [x] **R5a. Requests.** `RequestsPage.jsx` — `PageHeader`/`PageBody`,
+        `Card`-wrapped new-request form (item `<select>` w/ "on hand: N",
+        quantity, note → `POST /api/requests/`, both roles). `Table`
+        item/qty/`Badge` status/note/requester/decided-by; the list is
+        server-scoped so STAFF only ever see their own rows and ADMIN
+        sees all (both proven headless, incl. two distinct STAFF users
+        not seeing each other's requests). ADMIN gets an actions column;
+        a **PENDING** row shows `TextAction` Approve (green) + Reject
+        (red, `confirm`) with a small per-row error line (the `Field`
+        error style — `text-xs text-pd-red mt-1` — reused inline, not a
+        toast, not a cell-filling `ErrorBanner`); on a 400 the
+        insufficient-stock message renders there and the row stays
+        PENDING with Approve still clickable. **Decided rows render
+        `null` in the actions cell — zero controls, not disabled ones**,
+        client-side. No new primitives, helpers, or backend changes.
+        Verified headless 21/21: both-role visibility + STAFF isolation,
+        Approve → APPROVED + decided_by/at + Equipment page shows the
+        deduction, Reject → REJECTED + no stock change, insufficient-stock
+        Approve → inline row error + stays PENDING + no partial deduction,
+        decided rows have no controls; no console errors; screenshot
+        matches the design system.
+  - [ ] **R5b. Trainings.** Schedule list/table; ADMIN create/edit modal
+        with a MANAGERIAL/SKILLS `<optgroup>` catalog select + archive/
+        restore/permanent-delete; STAFF Register/Cancel per row with the
+        specific blocker reason shown (archived / wrong status / past
+        deadline / full / already registered); ADMIN expandable panel —
+        registrations roster with an attendance toggle showing
+        matrix-bridge feedback (`matrix_updated` + reason) and a
+        manual-attendee sub-table (list/add/delete/attendance) marked as
+        NOT feeding the matrix.
 - [ ] **R6. Personnel matrix.**
 - [ ] **R7. Archived + cutover.** Archived tabbed page, then delete the
       Django template frontend (`templates/`, `static/core/*.{js,css}`,
@@ -716,9 +752,14 @@ thumbnails) → R4 React Equipment + Stock movements pages (role-aware
 category filter — the STAFF audit fix reimplemented; CSV export via new
 `lib/csv.js`; image upload as JSON + follow-up FormData PATCH;
 holder-history modal; inline insufficient-stock error on the movements
-form; **no backend changes**). **Steps 1–9 done + R1–R4 done**; Step 10
-(deploy — single-origin Django/whitenoise) and R5 (React Requests +
-Trainings pages) are the open fronts. Migrations:
+form; **no backend changes**) → R5a React Requests page (server-scoped
+list, PENDING-only Approve/Reject with an inline per-row insufficient-
+stock error, decided rows render zero controls; **no backend changes**).
+R5 was **split into R5a (Requests, done) + R5b (Trainings, open)** —
+Requests/Trainings share no surface and Trainings is the app's biggest
+page (its own cycle, like Step 7d). **Steps 1–9 done + R1–R4 + R5a
+done**; Step 10 (deploy — single-origin Django/whitenoise) and R5b
+(React Trainings page) are the open fronts. Migrations:
 `core/0001`–`core/0005` (unchanged since Step 6c). Test suite: 199
 passing (Django; the React frontend has no test suite yet). Remote
 `origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main`
