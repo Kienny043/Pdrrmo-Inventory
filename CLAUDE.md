@@ -774,11 +774,34 @@ into `../PDRRMO_v3/`. It is a frozen snapshot, not a living reference.
       with no leakage; create appears in the right municipality;
       archive→restore round-trips with correct view-toggle behaviour;
       no console errors. **No backend changes.**
-- [ ] **R7. Archived + cutover.** Archived tabbed page, then delete the
-      Django template frontend (`templates/`, `static/core/*.{js,css}`,
-      `web_urls.py`, the page views, `context_processors.role`), point
-      `/` at the React build, update deploy config. Full parity
-      click-through of all 8 pages + login, both roles.
+- **R7. Archived + cutover.**
+  - [x] **R7 Archived page.** `ArchivedPage.jsx` on R2 primitives
+        (`Tabs`, `Table`, `TextAction`) — one `TABS` config array
+        (`{key,label,url,base,cols}` per tab), no per-tab logic, same
+        shape as the template's `archived.js`. 4 tabs Items / Staff /
+        Trainings / Personnel from `/api/{items,staff,trainings}/archived/`
+        + `/api/personnel/?archived=true`. Per row: `Restore` (green, all
+        admins) → `POST <base>/<id>/restore/`; `Delete permanently` (red)
+        → `DELETE <base>/<id>/permanent-delete/`, **rendered only when
+        `user.can_permanently_delete`** (absent from the DOM, not
+        disabled). ADMIN-only via the existing `ProtectedRoute`. Verified
+        headless 24/24: all 4 tabs load their archived rows + config
+        headers; Restore round-trips for Personnel and Items (row leaves
+        the tab, `is_archived:false` in the active list); a real
+        permanent-delete → 204 → detail endpoint 404; `Delete
+        permanently` absent (count 0) on all 4 tabs for a non-elevated
+        admin while `Restore` stays; no console errors. **No backend
+        changes.**
+  - [ ] **R7 cutover.** Point `/` + deep links at the React build (Django
+        + whitenoise serving `frontend/dist/`, SPA catch-all to
+        `index.html`), then delete the Django template frontend:
+        `templates/`, `static/core/*.{js,css}`, `web_urls.py`, the 9 page
+        views, `context_processors.py`, the `accounts/` auth-urls
+        include, `LOGIN_URL`, and the 5 Step-7 page-shell test classes.
+        Full parity click-through of all 8 React pages + login (both
+        roles) + a single-origin smoke test + the full Django suite at
+        its new count — all before the deletions land, in one atomic
+        commit.
 
 ## Current Git State
 
