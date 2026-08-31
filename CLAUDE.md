@@ -837,6 +837,86 @@ into `../PDRRMO_v3/`. It is a frozen snapshot, not a living reference.
         routes, and survives a deep-link refresh. Full Django suite:
         **178** (199 − 21). `manage.py check` clean.
 
+## Post-R7: Personnel-roster attendance for trainings
+
+Not part of the original R1–R7 plan — a follow-up feature from real-usage
+testing (alongside a small Improvement 1: the Personnel matrix now
+defaults its district select to the first district on load, so the page
+shows data immediately instead of an empty grid — `frontend/src/pages/
+PersonnelPage.jsx`, commit `49243f7`).
+
+**What it adds:** an ADMIN can search for and select an **existing
+`Personnel` record** (by name, across all districts — chosen, never
+free-typed) and add them to a training's roster. Marking attendance on
+such an entry upserts a `TrainingRecord` exactly like the User-linked
+attendance bridge does. This is a **third, distinct** attendee type,
+each kept unrepurposed:
+
+- `TrainingRegistration` — self-service, requires a `User` account;
+  feeds the matrix only if that user is linked to a `Personnel`.
+- `ManualAttendee` — free-typed name/municipality/affiliation, no
+  `Personnel` link; **never** feeds the matrix.
+- `PersonnelAttendee` *(new)* — admin-added FK to an existing
+  `Personnel`; an explicit, unambiguous link, so it **does** feed the
+  matrix.
+
+**Backend:**
+- New model `PersonnelAttendee` (`training` FK CASCADE, `personnel` FK
+  CASCADE, `attended`, `added_at`, `added_by` FK SET_NULL,
+  `unique_together(training, personnel)`) — migration **`core/0006`**.
+  No existing model altered.
+- `?search=` on `PersonnelViewSet.get_queryset` — `name__icontains`,
+  ADMIN-only, active-only default.
+- `PersonnelAttendeeViewSet` (`viewsets.ViewSet`, `IsAdmin`) nested
+  under the training, mirroring the `ManualAttendee` route shape —
+  explicit `path()` entries in `apps/core/urls.py`:
+  - `GET/POST  /api/trainings/<tpk>/personnel-attendees/` — list / add
+    (`{personnel: <id>}`; duplicate → **409**
+    `"<name> is already on this training's roster."`).
+  - `DELETE    /api/trainings/<tpk>/personnel-attendees/<pk>/` — hard
+    delete, 204.
+  - `PATCH     /api/trainings/<tpk>/personnel-attendees/<pk>/attendance/`
+    — `{attended: bool}`; toggles + runs the matrix bridge, response
+    carries `matrix_updated` + `matrix_reason`.
+- `PersonnelAttendeeSerializer` — embeds `personnel_name`,
+  `personnel_municipality`, computed `personnel_district`, `added_by`
+  (username).
+- **Shared `_matrix_bridge(training, personnel)` helper** extracted from
+  the existing User-linked `attendance` action and called from both it
+  and the new `set_attendance`. **Pure refactor** — the 8 existing
+  `Step6cAttendanceBridgeTests` are untouched and green, confirming zero
+  behavior change to the User-linked bridge.
+- `admin.py` — `PersonnelAttendeeAdmin` (autocomplete training +
+  personnel; `added_by`/`added_at` read-only).
+
+**Frontend:** a third **"Personnel roster"** section in
+`TrainingsPage.jsx`'s expandable `RosterPanel`, between "Registrations"
+and "Manual attendees". A debounced search-as-you-type `PersonnelPicker`
+(hits `?search=`, filters out personnel already on the roster); table of
+name / municipality / district / added-by / attendance checkbox (with
+`✓ matrix updated` / `matrix not updated — <reason>` / `attendance
+cleared` feedback, optimistic) / Remove. A note states attendance here
+**does** feed the training matrix — explicitly contrasted with the
+"do **not** feed" note on the Manual attendees section just below.
+
+**Tests:** 14 new (`PersonnelRosterModelTests`, `PersonnelSearchParamTests`,
+`PersonnelRosterCrudTests`, `PersonnelRosterAttendanceBridgeTests`) —
+model round-trip + `unique_together`, `?search=` filtering/permissions,
+roster CRUD (perm / dupe-409 / delete-204 / wrong-training-404), the
+attendance bridge (upsert with `date_start.year`, out-of-range year,
+no-matrix-key, un-mark-preserves, re-mark-no-duplicate), and explicit
+confirmation the refactored `_matrix_bridge` leaves the existing bridge
+tests green. **Suite: 192** (178 + 14). Verified end-to-end with a
+headless-Chromium run against the `DEBUG=False` single-origin server
+(15/15): create a matrix-linked training, add a Personnel from a
+different municipality than any training context, duplicate-add blocked,
+tick attendance → **cross-checked on `/personnel` itself** that the
+RDANA cell flipped to 2026, Remove clears the roster entry but not the
+`TrainingRecord`.
+
+**Scope:** standalone-system only. Public/portal training registration
+and self-service flows remain Step 11 (fold into `PDRRMO_v3`).
+
 ## Current Git State
 
 On branch `main`: `11c8a3c` scaffold → Step 2 reference-data → Step 3a/3b
@@ -904,7 +984,15 @@ single-origin (whitenoise for `/` + `/assets/*`, a SPA catch-all →
 `web_urls.py`, `context_processors.py`), the 9 page views, and the 5
 `Step7*PageShellTests` classes (21 tests). Landed as one atomic commit
 after a **60/60 full parity click-through** + a **single-origin smoke
-test** both passed.
+test** both passed. → **Post-R7 follow-ups** (real-usage testing):
+Improvement 1 — Personnel matrix defaults its district select to the
+first district on load (`PersonnelPage.jsx`, `49243f7`); **Post-R7
+Personnel-roster attendance** — new `PersonnelAttendee` model (migration
+`core/0006`), `?search=` on `PersonnelViewSet`, nested
+`PersonnelAttendeeViewSet` roster routes, an extracted shared
+`_matrix_bridge` helper (pure refactor), and a third "Personnel roster"
+section with a search-as-you-type picker in the Trainings page (see the
+dedicated section above).
 
 **The whole R1–R7 React rebuild is complete. Steps 1–9 done + R1–R7
 done.** Step 10 (deploy — Render + external Postgres; the single-origin
@@ -912,11 +1000,12 @@ serving mechanism is already wired) is the last build-order item. Step
 11 (fold this project's React frontend into `PDRRMO_v3`'s actual app +
 its role/JWT system) remains a later, separate effort — **unchanged in
 scope**; the SPA now being production here doesn't advance it. Migrations:
-`core/0001`–`core/0005` (unchanged since Step 6c). Test suite: **178
-passing** (199 − the 21 removed template-shell tests; the React frontend
-has no test suite — it's covered by the R1–R7 headless-Chromium runs).
-Remote `origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`;
-`main` tracks `origin/main`.
+`core/0001`–`core/0006` (`0006` = `PersonnelAttendee`, Post-R7). Test
+suite: **192 passing** (178 post-cutover + 14 for the Personnel-roster
+feature; the React frontend has no test suite — it's covered by the
+R1–R7 + Post-R7 headless-Chromium runs). Remote `origin` is
+`https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
+`origin/main`.
 
 Backend note — stock integrity (`apps/core/services.py`):
 `apply_stock_movement` is the ONLY path that changes

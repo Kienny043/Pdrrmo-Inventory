@@ -561,3 +561,39 @@ class ManualAttendee(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.municipality})"
+
+
+class PersonnelAttendee(models.Model):
+    """An existing Personnel record rostered onto a training by an admin.
+
+    Distinct from ``TrainingRegistration`` (needs a User account, self-service
+    register/cancel) and ``ManualAttendee`` (free-typed name, deliberately
+    does NOT feed the matrix). Because the ``personnel`` link is an explicit,
+    unambiguous admin selection — not fuzzy name matching — attendance marked
+    here safely upserts ``TrainingRecord`` via the same bridge the User-linked
+    attendance action uses. Admin-managed only: no soft-cancel, removal is a
+    hard delete (like ``ManualAttendee``).
+    """
+
+    training = models.ForeignKey(
+        TrainingSchedule, on_delete=models.CASCADE, related_name="personnel_attendees"
+    )
+    personnel = models.ForeignKey(
+        Personnel, on_delete=models.CASCADE, related_name="training_rosters"
+    )
+    attended = models.BooleanField(default=False)
+    added_at = models.DateTimeField(auto_now_add=True)
+    added_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
+    class Meta:
+        ordering = ["personnel__name"]
+        unique_together = ("training", "personnel")
+
+    def __str__(self):
+        return f"{self.personnel} @ {self.training}"

@@ -24,6 +24,7 @@ from .models import (
     ItemHolderLog,
     ManualAttendee,
     Personnel,
+    PersonnelAttendee,
     Staff,
     StockMovement,
     TrainingRecord,
@@ -45,6 +46,7 @@ from .serializers import (
     InventoryRequestSerializer,
     ItemHolderLogSerializer,
     ManualAttendeeSerializer,
+    PersonnelAttendeeSerializer,
     PersonnelSerializer,
     RequestDecisionSerializer,
     StaffSerializer,
@@ -146,6 +148,12 @@ class PersonnelViewSet(viewsets.ModelViewSet):
         district = params.get("district")
         if district is not None:
             qs = qs.filter(municipality__in=reference.municipalities_in(district))
+
+        # ?search= — name substring, for the training-roster Personnel picker
+        # (searched across all districts/municipalities, active only).
+        search = (params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(name__icontains=search)
 
         return qs
 
@@ -576,6 +584,33 @@ class InventoryRequestViewSet(
 # ==========================================================================
 
 
+def _matrix_bridge(training, personnel):
+    """Upsert one TrainingRecord from a positive attendance mark.
+
+    The single implementation shared by the User-linked attendance action and
+    the Personnel-roster set_attendance action. The caller has already
+    confirmed ``attended`` is True. Returns ``(updated: bool, reason: str|None)``
+    — ``reason`` is set only when ``updated`` is False. **Never deletes
+    anything**: un-marking attendance simply never calls this.
+
+    Reason precedence matches the original inline logic: no matrix key, then no
+    Personnel, then year out of the matrix range.
+    """
+    if not training.matrix_training_key:
+        return False, "the training has no matrix_training_key"
+    if personnel is None:
+        return False, "the attending user has no linked Personnel record"
+    year = training.date_start.year
+    if not TRAINING_YEAR_MIN <= year <= TRAINING_YEAR_MAX:
+        return False, f"training year {year} is outside the matrix range"
+    TrainingRecord.objects.update_or_create(
+        personnel=personnel,
+        training_key=training.matrix_training_key,
+        defaults={"year_attained": year},
+    )
+    return True, None
+
+
 class TrainingScheduleViewSet(ArchiveLifecycleMixin, viewsets.ModelViewSet):
     """CRUD + archive lifecycle + registration + attendance (spec Section 4).
 
@@ -712,22 +747,9 @@ class TrainingScheduleViewSet(ArchiveLifecycleMixin, viewsets.ModelViewSet):
 
         matrix_updated = False
         matrix_reason = None
-        if attended and training.matrix_training_key:
+        if attended:
             personnel = Personnel.objects.filter(user_id=user_id).first()
-            year = training.date_start.year
-            if personnel is None:
-                matrix_reason = "the attending user has no linked Personnel record"
-            elif not TRAINING_YEAR_MIN <= year <= TRAINING_YEAR_MAX:
-                matrix_reason = f"training year {year} is outside the matrix range"
-            else:
-                TrainingRecord.objects.update_or_create(
-                    personnel=personnel,
-                    training_key=training.matrix_training_key,
-                    defaults={"year_attained": year},
-                )
-                matrix_updated = True
-        elif attended:
-            matrix_reason = "the training has no matrix_training_key"
+            matrix_updated, matrix_reason = _matrix_bridge(training, personnel)
 
         data = TrainingRegistrationSerializer(reg).data
         data["matrix_updated"] = matrix_updated
@@ -775,3 +797,71 @@ class ManualAttendeeViewSet(viewsets.ViewSet):
         attendee.attended = form.validated_data["attended"]
         attendee.save(update_fields=["attended"])
         return Response(ManualAttendeeSerializer(attendee).data)
+
+
+class PersonnelAttendeeViewSet(viewsets.ViewSet):
+    """Nested routes to roster an existing Personnel record onto a training.
+
+    ADMIN only. Hard delete (no soft-cancel). Unlike ManualAttendee, marking
+    attendance here DOES feed the training matrix — via the same
+    ``_matrix_bridge`` the User-linked attendance action uses — because the
+    Personnel link is an explicit admin selection, not fuzzy name matching.
+    """
+
+    permission_classes = [IsAdmin]
+
+    def _training(self, training_pk):
+        return get_object_or_404(TrainingSchedule, pk=training_pk)
+
+    def _attendee(self, training_pk, pk):
+        return get_object_or_404(
+            PersonnelAttendee, pk=pk, training_id=training_pk
+        )
+
+    def list(self, request, training_pk=None):
+        self._training(training_pk)
+        qs = PersonnelAttendee.objects.filter(
+            training_id=training_pk
+        ).select_related("personnel", "added_by")
+        return Response(PersonnelAttendeeSerializer(qs, many=True).data)
+
+    def create(self, request, training_pk=None):
+        training = self._training(training_pk)
+        serializer = PersonnelAttendeeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        personnel = serializer.validated_data["personnel"]
+        if PersonnelAttendee.objects.filter(
+            training=training, personnel=personnel
+        ).exists():
+            return Response(
+                {"detail": f"{personnel.name} is already on this training's roster."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        obj = serializer.save(training=training, added_by=request.user)
+        return Response(
+            PersonnelAttendeeSerializer(obj).data, status=status.HTTP_201_CREATED
+        )
+
+    def destroy(self, request, training_pk=None, pk=None):
+        self._attendee(training_pk, pk).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def set_attendance(self, request, training_pk=None, pk=None):
+        attendee = self._attendee(training_pk, pk)
+        training = attendee.training
+        form = AttendanceSerializer(data=request.data)
+        form.is_valid(raise_exception=True)
+        attended = form.validated_data["attended"]
+        attendee.attended = attended
+        attendee.save(update_fields=["attended"])
+
+        matrix_updated = False
+        matrix_reason = None
+        if attended:
+            matrix_updated, matrix_reason = _matrix_bridge(training, attendee.personnel)
+
+        data = PersonnelAttendeeSerializer(attendee).data
+        data["matrix_updated"] = matrix_updated
+        if attended and not matrix_updated:
+            data["matrix_reason"] = matrix_reason
+        return Response(data)

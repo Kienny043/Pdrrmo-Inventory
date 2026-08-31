@@ -11,6 +11,7 @@ from .models import (
     ItemHolderLog,
     ManualAttendee,
     Personnel,
+    PersonnelAttendee,
     Staff,
     StockMovement,
     TrainingRecord,
@@ -381,3 +382,39 @@ class AttendanceSerializer(serializers.Serializer):
     """Body for the attendance-toggle endpoints."""
 
     attended = serializers.BooleanField()
+
+
+class PersonnelAttendeeSerializer(serializers.ModelSerializer):
+    """An existing Personnel record rostered onto a training (admin-added).
+
+    ``personnel`` is the only writable field (a PK of an existing record);
+    everything else is derived / audit.
+    """
+
+    personnel_name = serializers.CharField(source="personnel.name", read_only=True)
+    personnel_municipality = serializers.CharField(
+        source="personnel.municipality", read_only=True
+    )
+    personnel_district = serializers.SerializerMethodField()
+    added_by = serializers.SlugRelatedField(slug_field="username", read_only=True)
+
+    class Meta:
+        model = PersonnelAttendee
+        fields = [
+            "id",
+            "training",
+            "personnel",
+            "personnel_name",
+            "personnel_municipality",
+            "personnel_district",
+            "attended",
+            "added_at",
+            "added_by",
+        ]
+        read_only_fields = ["training", "attended", "added_at"]
+
+    def get_personnel_district(self, obj):
+        try:
+            return reference.district_for(obj.personnel.municipality)
+        except KeyError:
+            return None

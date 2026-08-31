@@ -28,6 +28,7 @@ from .models import (
     ItemHolderLog,
     ManualAttendee,
     Personnel,
+    PersonnelAttendee,
     Staff,
     StockMovement,
     TrainingRecord,
@@ -1869,3 +1870,192 @@ class R1MeEndpointTests(TestCase):
         r = c.get("/api/me/")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data["username"], "mebearer")
+
+
+# --------------------------------------------------------------------------
+# Personnel-roster attendees — add an existing Personnel to a training's
+# roster; attendance feeds the matrix via the shared _matrix_bridge helper
+# --------------------------------------------------------------------------
+
+
+class PersonnelRosterModelTests(TestCase):
+    def test_round_trip_and_unique_together(self):
+        t = _sched(title="RDANA")
+        p = Personnel.objects.create(name="Josie Navarro", municipality="Catanauan")
+        pa = PersonnelAttendee.objects.create(training=t, personnel=p)
+        self.assertFalse(pa.attended)
+        self.assertIsNotNone(pa.added_at)
+        with self.assertRaises(IntegrityError):
+            PersonnelAttendee.objects.create(training=t, personnel=p)
+
+    def test_matrix_bridge_helper_is_behaviour_neutral(self):
+        from .views import _matrix_bridge
+
+        p = Personnel.objects.create(name="X", municipality="Lucban")
+        t_ok = _sched(title="a", date_start=datetime.date(2026, 3, 1), matrix_training_key="BLS")
+        t_nokey = _sched(title="b", matrix_training_key="")
+        t_oldyear = _sched(title="c", date_start=datetime.date(1990, 1, 1), matrix_training_key="BLS")
+
+        self.assertEqual(
+            _matrix_bridge(t_nokey, p),
+            (False, "the training has no matrix_training_key"),
+        )
+        self.assertEqual(
+            _matrix_bridge(t_ok, None),
+            (False, "the attending user has no linked Personnel record"),
+        )
+        updated, reason = _matrix_bridge(t_oldyear, p)
+        self.assertFalse(updated)
+        self.assertIn("outside the matrix range", reason)
+        updated, reason = _matrix_bridge(t_ok, p)
+        self.assertTrue(updated)
+        self.assertIsNone(reason)
+        self.assertEqual(
+            TrainingRecord.objects.get(personnel=p, training_key="BLS").year_attained, 2026
+        )
+
+
+class PersonnelSearchParamTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        Personnel.objects.create(name="Josie Navarro", municipality="Catanauan")
+        Personnel.objects.create(name="Dennis Cruz", municipality="Lucena City")
+        Personnel.objects.create(name="Maria Santos", municipality="Tayabas City")
+
+    def test_search_filters_by_name_substring_across_districts(self):
+        r = self.c.get("/api/personnel/?search=cruz")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([p["name"] for p in r.json()], ["Dennis Cruz"])
+
+    def test_search_is_case_insensitive_and_active_only(self):
+        Personnel.objects.create(
+            name="Archived Cruz", municipality="Lucban", is_archived=True
+        )
+        r = self.c.get("/api/personnel/?search=CRUZ")
+        self.assertEqual({p["name"] for p in r.json()}, {"Dennis Cruz"})
+
+    def test_search_requires_admin(self):
+        sc = APIClient()
+        sc.force_authenticate(user=make_user("s", role=Role.STAFF))
+        self.assertEqual(sc.get("/api/personnel/?search=cruz").status_code, 403)
+
+
+class PersonnelRosterCrudTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.staff = make_user("s", role=Role.STAFF)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        self.t = _sched(title="RDANA", matrix_training_key="RDANA")
+        self.p = Personnel.objects.create(name="Josie Navarro", municipality="Catanauan")
+
+    def _base(self):
+        return f"/api/trainings/{self.t.pk}/personnel-attendees/"
+
+    def test_add_lists_and_delete(self):
+        r = self.c.post(self._base(), {"personnel": self.p.pk}, format="json")
+        self.assertEqual(r.status_code, 201)
+        body = r.json()
+        self.assertEqual(body["personnel"], self.p.pk)
+        self.assertEqual(body["personnel_name"], "Josie Navarro")
+        self.assertEqual(body["personnel_municipality"], "Catanauan")
+        self.assertEqual(body["personnel_district"], "Third District")
+        self.assertEqual(body["added_by"], "a")
+        self.assertFalse(body["attended"])
+        pa_id = body["id"]
+
+        self.assertEqual([x["id"] for x in self.c.get(self._base()).json()], [pa_id])
+
+        self.assertEqual(self.c.delete(f"{self._base()}{pa_id}/").status_code, 204)
+        self.assertEqual(self.c.get(self._base()).json(), [])
+
+    def test_duplicate_roster_entry_is_409(self):
+        self.c.post(self._base(), {"personnel": self.p.pk}, format="json")
+        r = self.c.post(self._base(), {"personnel": self.p.pk}, format="json")
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("already on this training", r.json()["detail"])
+        self.assertEqual(PersonnelAttendee.objects.filter(training=self.t).count(), 1)
+
+    def test_all_routes_are_admin_only(self):
+        sc = APIClient()
+        sc.force_authenticate(user=self.staff)
+        self.assertEqual(sc.get(self._base()).status_code, 403)
+        self.assertEqual(
+            sc.post(self._base(), {"personnel": self.p.pk}, format="json").status_code, 403
+        )
+        pa = PersonnelAttendee.objects.create(training=self.t, personnel=self.p)
+        self.assertEqual(sc.delete(f"{self._base()}{pa.pk}/").status_code, 403)
+        self.assertEqual(
+            sc.patch(
+                f"{self._base()}{pa.pk}/attendance/", {"attended": True}, format="json"
+            ).status_code,
+            403,
+        )
+
+    def test_wrong_training_in_path_is_404(self):
+        other = _sched(title="Other")
+        pa = PersonnelAttendee.objects.create(training=self.t, personnel=self.p)
+        r = self.c.delete(f"/api/trainings/{other.pk}/personnel-attendees/{pa.pk}/")
+        self.assertEqual(r.status_code, 404)
+
+
+class PersonnelRosterAttendanceBridgeTests(TestCase):
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        self.t = _sched(
+            title="RDANA Batch", date_start=datetime.date(2026, 4, 1),
+            matrix_training_key="RDANA",
+        )
+        self.p = Personnel.objects.create(name="Josie Navarro", municipality="Catanauan")
+        self.pa = PersonnelAttendee.objects.create(training=self.t, personnel=self.p)
+
+    def _mark(self, attended):
+        return self.c.patch(
+            f"/api/trainings/{self.t.pk}/personnel-attendees/{self.pa.pk}/attendance/",
+            {"attended": attended}, format="json",
+        )
+
+    def test_attendance_true_upserts_with_date_start_year(self):
+        r = self._mark(True)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["attended"])
+        self.assertTrue(r.json()["matrix_updated"])
+        rec = TrainingRecord.objects.get(personnel=self.p, training_key="RDANA")
+        self.assertEqual(rec.year_attained, 2026)
+
+    def test_year_out_of_range_skips_upsert_with_reason(self):
+        self.t.date_start = datetime.date(1990, 1, 1)
+        self.t.save(update_fields=["date_start"])
+        r = self._mark(True)
+        self.assertFalse(r.json()["matrix_updated"])
+        self.assertIn("outside the matrix range", r.json()["matrix_reason"])
+        self.assertEqual(TrainingRecord.objects.count(), 0)
+
+    def test_no_matrix_key_reports_reason(self):
+        self.t.matrix_training_key = ""
+        self.t.save(update_fields=["matrix_training_key"])
+        r = self._mark(True)
+        self.assertFalse(r.json()["matrix_updated"])
+        self.assertIn("no matrix_training_key", r.json()["matrix_reason"])
+        self.assertEqual(TrainingRecord.objects.count(), 0)
+
+    def test_unmarking_does_not_delete_the_record(self):
+        self._mark(True)
+        self.assertEqual(TrainingRecord.objects.filter(personnel=self.p).count(), 1)
+        r = self._mark(False)
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.json()["attended"])
+        self.assertEqual(TrainingRecord.objects.filter(personnel=self.p).count(), 1)
+
+    def test_remarking_does_not_duplicate_the_record(self):
+        self._mark(True)
+        self._mark(False)
+        self._mark(True)
+        self.assertEqual(
+            TrainingRecord.objects.filter(personnel=self.p, training_key="RDANA").count(),
+            1,
+        )

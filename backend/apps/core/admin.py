@@ -26,6 +26,7 @@ from .models import (
     ItemHolderLog,
     ManualAttendee,
     Personnel,
+    PersonnelAttendee,
     Staff,
     StockMovement,
     TrainingRecord,
@@ -224,6 +225,17 @@ class ManualAttendeeAdmin(admin.ModelAdmin):
     list_select_related = ("training",)
     autocomplete_fields = ("training",)
     readonly_fields = ("created_at",)
+
+
+@admin.register(PersonnelAttendee)
+class PersonnelAttendeeAdmin(admin.ModelAdmin):
+    list_display = ("personnel", "training", "attended", "added_by", "added_at")
+    list_filter = ("attended", "training")
+    search_fields = ("personnel__name", "training__title")
+    list_select_related = ("personnel", "training", "added_by")
+    autocomplete_fields = ("training", "personnel")
+    # attendance flows through the API's matrix bridge; added_by/added_at are audit
+    readonly_fields = ("added_by", "added_at")
 
 
 # --------------------------------------------------------------------------

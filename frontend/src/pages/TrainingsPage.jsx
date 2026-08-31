@@ -160,21 +160,98 @@ function TrainingForm({ training, catalog, onSaved, onCancel }) {
 // expandable ADMIN panel: roster + manual attendees
 // --------------------------------------------------------------------------
 
+// Search-as-you-type picker over existing Personnel records (all districts).
+function PersonnelPicker({ excludeIds, onPick }) {
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState([])
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    const term = q.trim()
+    if (!term) {
+      setResults([])
+      return
+    }
+    setLoading(true)
+    const id = setTimeout(async () => {
+      try {
+        setResults(await apiGet(`/api/personnel/?search=${encodeURIComponent(term)}`))
+      } catch {
+        setResults([])
+      } finally {
+        setLoading(false)
+      }
+    }, 250)
+    return () => clearTimeout(id)
+  }, [q])
+
+  const shown = results.filter((p) => !excludeIds.includes(p.id)).slice(0, 15)
+
+  return (
+    <div className="relative w-80">
+      <input
+        className={INPUT_CLASS}
+        placeholder="Search personnel by name…"
+        value={q}
+        onChange={(e) => {
+          setQ(e.target.value)
+          setOpen(true)
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+      />
+      {open && q.trim() && (
+        <div className="absolute z-20 mt-1 w-full bg-white border border-pd-border rounded-lg shadow-lg max-h-64 overflow-y-auto">
+          {loading && <div className="px-3 py-2 text-xs text-pd-text-secondary">Searching…</div>}
+          {!loading && shown.length === 0 && (
+            <div className="px-3 py-2 text-xs text-pd-text-secondary">No matching personnel.</div>
+          )}
+          {shown.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className="block w-full text-left px-3 py-2 text-sm hover:bg-pd-gray"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                onPick(p)
+                setQ('')
+                setResults([])
+                setOpen(false)
+              }}
+            >
+              {p.name}
+              <span className="text-pd-text-secondary">
+                {' '}
+                — {p.municipality} ({p.district})
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function RosterPanel({ training, municipalities }) {
   const [regs, setRegs] = useState(null)
   const [manual, setManual] = useState(null)
+  const [roster, setRoster] = useState(null) // Personnel-roster attendees
   const [error, setError] = useState('')
-  const [note, setNote] = useState({}) // { [user_id]: {text, tone} }
+  const [note, setNote] = useState({}) // registrations: { [user_id]: {text, tone} }
+  const [rosterNote, setRosterNote] = useState({}) // roster: { [id]: {text, tone} }
   const [maForm, setMaForm] = useState({ name: '', designation: '', municipality: '', org_affiliation: 'EMPLOYEE' })
 
   const loadPanel = useCallback(async () => {
     try {
-      const [r, m] = await Promise.all([
+      const [r, m, pr] = await Promise.all([
         apiGet(`/api/trainings/${training.id}/registrations/`),
         apiGet(`/api/trainings/${training.id}/manual-attendees/`),
+        apiGet(`/api/trainings/${training.id}/personnel-attendees/`),
       ])
       setRegs(r)
       setManual(m)
+      setRoster(pr)
     } catch (e) {
       setError(e.message)
     }
@@ -229,6 +306,43 @@ function RosterPanel({ training, municipalities }) {
     }
   }
 
+  // --- Personnel-roster attendees ---
+  const addRosterPersonnel = async (p) => {
+    setError('')
+    try {
+      await apiPost(`/api/trainings/${training.id}/personnel-attendees/`, { personnel: p.id })
+      await loadPanel()
+    } catch (err) {
+      setError(err.message) // e.g. "<name> is already on this training's roster."
+    }
+  }
+
+  const toggleRoster = async (pa, attended) => {
+    setRoster((rs) => rs.map((x) => (x.id === pa.id ? { ...x, attended } : x))) // optimistic
+    setRosterNote((n) => ({ ...n, [pa.id]: { text: '…', tone: 'muted' } }))
+    try {
+      const resp = await apiPatch(
+        `/api/trainings/${training.id}/personnel-attendees/${pa.id}/attendance/`,
+        { attended }
+      )
+      if (!attended) setRosterNote((n) => ({ ...n, [pa.id]: { text: 'attendance cleared', tone: 'muted' } }))
+      else if (resp.matrix_updated) setRosterNote((n) => ({ ...n, [pa.id]: { text: '✓ matrix updated', tone: 'ok' } }))
+      else setRosterNote((n) => ({ ...n, [pa.id]: { text: `matrix not updated — ${resp.matrix_reason || 'no reason given'}`, tone: 'warn' } }))
+    } catch (e) {
+      setRoster((rs) => rs.map((x) => (x.id === pa.id ? { ...x, attended: !attended } : x))) // revert
+      setRosterNote((n) => ({ ...n, [pa.id]: { text: e.message, tone: 'warn' } }))
+    }
+  }
+
+  const deleteRoster = async (pa) => {
+    try {
+      await apiDelete(`/api/trainings/${training.id}/personnel-attendees/${pa.id}/`)
+      setRoster((rs) => rs.filter((x) => x.id !== pa.id))
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
   const NOTE_CLASS = { ok: 'text-pd-green', warn: 'text-pd-red', muted: 'text-pd-text-secondary' }
 
   return (
@@ -276,6 +390,77 @@ function RosterPanel({ training, municipalities }) {
             </tbody>
           </Table>
         )}
+      </div>
+
+      <div>
+        <h3 className="text-sm font-bold mb-1" style={{ fontFamily: "'Sora', sans-serif" }}>Personnel roster</h3>
+        <p className="text-xs text-pd-text-secondary mb-2">
+          Existing Personnel records added by an admin. Attendance here <strong>does</strong> feed the
+          training matrix (upserts their training-year cell), unlike manual attendees below.
+        </p>
+        {!roster ? (
+          <LoadingSection />
+        ) : (
+          <Table>
+            <THead>
+              <Th>Name</Th>
+              <Th>Municipality</Th>
+              <Th>District</Th>
+              <Th>Added by</Th>
+              <Th>Attended</Th>
+              <Th />
+            </THead>
+            <tbody>
+              {roster.map((pa) => (
+                <Tr key={pa.id}>
+                  <Td>{pa.personnel_name}</Td>
+                  <Td variant="muted">{pa.personnel_municipality}</Td>
+                  <Td variant="muted">{pa.personnel_district || '—'}</Td>
+                  <Td variant="muted">{pa.added_by || '—'}</Td>
+                  <Td variant="plain">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={!!pa.attended}
+                        onChange={(e) => toggleRoster(pa, e.target.checked)}
+                      />
+                      {rosterNote[pa.id] && (
+                        <span className={`text-xs ${NOTE_CLASS[rosterNote[pa.id].tone]}`}>
+                          {rosterNote[pa.id].text}
+                        </span>
+                      )}
+                    </label>
+                  </Td>
+                  <Td variant="plain">
+                    <TextAction
+                      tone="red"
+                      confirm={`Remove ${pa.personnel_name} from this training's roster?`}
+                      onClick={() => deleteRoster(pa)}
+                    >
+                      Remove
+                    </TextAction>
+                  </Td>
+                </Tr>
+              ))}
+              {roster.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <p className="text-xs text-pd-text-secondary px-4 py-3">No personnel on the roster.</p>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </Table>
+        )}
+        <div className="flex items-end gap-3 mt-3">
+          <div>
+            <label className="text-xs text-pd-text-secondary block mb-1">Add existing personnel</label>
+            <PersonnelPicker
+              excludeIds={(roster || []).map((pa) => pa.personnel)}
+              onPick={addRosterPersonnel}
+            />
+          </div>
+        </div>
       </div>
 
       <div>

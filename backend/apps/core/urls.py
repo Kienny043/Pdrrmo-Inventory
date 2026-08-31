@@ -22,6 +22,12 @@ manual_attendee_list = _ma.as_view({"get": "list", "post": "create"})
 manual_attendee_detail = _ma.as_view({"delete": "destroy"})
 manual_attendee_attendance = _ma.as_view({"patch": "set_attendance"})
 
+# Personnel-roster attendees — same nested shape, FK'd to an existing Personnel.
+_pa = views.PersonnelAttendeeViewSet
+personnel_attendee_list = _pa.as_view({"get": "list", "post": "create"})
+personnel_attendee_detail = _pa.as_view({"delete": "destroy"})
+personnel_attendee_attendance = _pa.as_view({"patch": "set_attendance"})
+
 urlpatterns = [
     # --- auth for the React SPA ---
     path("token/", TokenObtainPairView.as_view(), name="token-obtain-pair"),
@@ -44,6 +50,21 @@ urlpatterns = [
         "trainings/<int:training_pk>/manual-attendees/<int:pk>/attendance/",
         manual_attendee_attendance,
         name="manual-attendee-attendance",
+    ),
+    path(
+        "trainings/<int:training_pk>/personnel-attendees/",
+        personnel_attendee_list,
+        name="personnel-attendee-list",
+    ),
+    path(
+        "trainings/<int:training_pk>/personnel-attendees/<int:pk>/",
+        personnel_attendee_detail,
+        name="personnel-attendee-detail",
+    ),
+    path(
+        "trainings/<int:training_pk>/personnel-attendees/<int:pk>/attendance/",
+        personnel_attendee_attendance,
+        name="personnel-attendee-attendance",
     ),
     *router.urls,
 ]
