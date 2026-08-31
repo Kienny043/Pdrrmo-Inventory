@@ -1,0 +1,167 @@
+/* Personnel-matrix page only. Sticky/grid mechanics that Tailwind utility
+   classes can't express cleanly (frozen first + last columns, a two-row
+   sticky header, and a nested-sticky band label). Ported from the template
+   build's matrix.css — including its fix for the Chrome rowspan+sticky
+   collapse: the header is two FULL rows, never rowspan. */
+
+.matrix-scroll {
+  overflow: auto;
+  max-height: 74vh;
+  border: 1px solid var(--color-pd-border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+#matrix-grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+#matrix-grid th,
+#matrix-grid td {
+  border-right: 1px solid var(--color-pd-border);
+  border-bottom: 1px solid var(--color-pd-border);
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+/* ---- two-row sticky header ---- */
+#matrix-grid thead th {
+  position: sticky;
+  background: var(--color-pd-gray);
+  z-index: 2;
+  text-align: left;
+}
+#matrix-grid thead tr.band-row th {
+  top: 0;
+  height: 1.7em;
+  padding: 0;
+}
+#matrix-grid thead tr.label-row th {
+  top: 1.7em;
+  vertical-align: bottom;
+}
+#matrix-grid th.band-managerial {
+  background: #dfe9f6;
+}
+#matrix-grid th.band-skills {
+  background: #e6f2e6;
+}
+#matrix-grid th.corner {
+  background: var(--color-pd-gray);
+}
+/* the band label text is itself sticky — pinned just past the frozen Name
+   column so it stays readable while its group's columns are in view */
+#matrix-grid .band-label {
+  position: sticky;
+  left: 170px;
+  display: inline-block;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+#matrix-grid th.band-managerial .band-label {
+  background: #dfe9f6;
+}
+#matrix-grid th.band-skills .band-label {
+  background: #e6f2e6;
+}
+#matrix-grid th.train-h {
+  font-weight: 500;
+  font-size: 11px;
+  max-width: 5.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- frozen Name column (left) ---- */
+#matrix-grid .col-name {
+  position: sticky;
+  left: 0;
+  background: #fff;
+  z-index: 1;
+  border-right: 2px solid var(--color-pd-border);
+  min-width: 170px;
+}
+#matrix-grid thead .col-name {
+  z-index: 3;
+  background: var(--color-pd-gray);
+}
+
+/* ---- frozen actions column (right) ---- */
+#matrix-grid .row-actions {
+  position: sticky;
+  right: 0;
+  background: #fff;
+  z-index: 1;
+  border-left: 2px solid var(--color-pd-border);
+}
+#matrix-grid thead .row-actions {
+  z-index: 3;
+  background: var(--color-pd-gray);
+}
+
+/* ---- inline-editable cells ---- */
+#matrix-grid td.id-cell input,
+#matrix-grid td.id-cell textarea,
+#matrix-grid td.id-cell select {
+  font: inherit;
+  border: 1px solid transparent;
+  background: transparent;
+  width: 100%;
+  min-width: 8rem;
+  padding: 1px 3px;
+}
+#matrix-grid td.id-cell input:focus,
+#matrix-grid td.id-cell textarea:focus,
+#matrix-grid td.id-cell select:focus {
+  border-color: var(--color-pd-border);
+  background: #fff;
+  outline: none;
+}
+#matrix-grid td.other textarea {
+  min-width: 12rem;
+  resize: vertical;
+}
+
+#matrix-grid td.year-cell {
+  text-align: center;
+}
+#matrix-grid input.year {
+  width: 4.2rem;
+  font: inherit;
+  text-align: center;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 1px;
+}
+#matrix-grid input.year:focus {
+  border-color: var(--color-pd-border);
+  background: #fff;
+  outline: none;
+}
+#matrix-grid input.year:not(:placeholder-shown) {
+  background: #f4f9f4;
+}
+
+/* ---- save feedback ---- */
+.matrix-cell-saving {
+  opacity: 0.45;
+}
+@keyframes matrixOk {
+  from {
+    background: #d5efd5;
+  }
+}
+@keyframes matrixErr {
+  from {
+    background: #f6d6d2;
+  }
+}
+.matrix-flash-ok {
+  animation: matrixOk 0.6s ease;
+}
+.matrix-flash-err {
+  animation: matrixErr 0.6s ease;
+}

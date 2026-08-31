@@ -736,7 +736,44 @@ into `../PDRRMO_v3/`. It is a frozen snapshot, not a living reference.
         archived-view (blocker #1 shows there) → restore → re-archive →
         permanent-delete → 404. No console errors; screenshot matches
         the design system.
-- [ ] **R6. Personnel matrix.**
+- [x] **R6. Personnel matrix.** `PersonnelPage.jsx` (rewritten) +
+      `PersonnelMatrix.css` (new, scoped to `#matrix-grid`). ADMIN-only —
+      `/personnel` is already behind `ProtectedRoute allowedRoles=['ADMIN']`
+      (R2), so STAFF is redirected to `/equipment` (same effect as the
+      template's notice — STAFF gets no data). Filter row: District
+      `<select>` (required) + Municipality `<select>` (disabled until a
+      district; empty = whole district, Municipality column shown) + View
+      `<select>` (Active/Archived) + `+ New Personnel` (disabled until a
+      district) — matches the template exactly. **Two-row MANAGERIAL/
+      SKILLS banded header built as two FULL `<tr>`s, never rowspan** —
+      the template's fix for the Chrome rowspan+sticky collapse.
+      **Triple-sticky layout** (`PersonnelMatrix.css`, ported from
+      `matrix.css` using the `--color-pd-*` tokens): frozen Name column
+      (`left:0`), frozen actions column (`right:0`), sticky two-row
+      header (`top:0` / `top:1.7em`), and a **nested-sticky band label**
+      (`.band-label{position:sticky;left:170px}`) pinned just past the
+      Name column. All 5 identity fields inline-editable in place (name/
+      designation/employment_status `<input>`, org_affiliation `<select>`,
+      other_drr_training `<textarea>`) blur-to-save `PATCH /api/personnel/
+      <id>/`; each of the 27 training cells is a blur-to-save year
+      `<input>` hitting `…/training-record/<key>/` (`{year_attained:N}` or
+      `{...:null}` to clear); filled cells get the faint green
+      `:not(:placeholder-shown)` tint. **New Personnel is a `Modal`**
+      (stated: consistent with every other R3–R5 create flow, and an
+      inline new row would be unreachable in a 33-column horizontally-
+      scrolled grid). Per-row `TextAction` Archive (active) / Restore
+      (archived). Verified headless 40/40 — **including measured
+      `getBoundingClientRect()` deltas at scrollLeft 0/450/max**: Name
+      header+body cells stay at left≈257 (Δ≤2px), the MANAGERIAL band
+      label pins at left=427 (~170px past the frozen column), the actions
+      header+body cells freeze to the container's right edge (Δ≤3px), and
+      the band-row keeps its 24px height with both band labels visible
+      (not collapsed — the exact bug class the template build caught).
+      Also: inline year-cell + identity edits persist across a full page
+      reload; data isolation holds across First/Second/Third districts
+      with no leakage; create appears in the right municipality;
+      archive→restore round-trips with correct view-toggle behaviour;
+      no console errors. **No backend changes.**
 - [ ] **R7. Archived + cutover.** Archived tabbed page, then delete the
       Django template frontend (`templates/`, `static/core/*.{js,css}`,
       `web_urls.py`, the page views, `context_processors.role`), point
@@ -791,9 +828,17 @@ backup), expandable roster panel with matrix-bridge feedback per
 attendance toggle (optimistic UI, cross-checked against the real
 `/api/personnel/` in testing), manual-attendees sub-table marked as not
 feeding the matrix, catalog-grouped create/edit modal, full archive
-lifecycle; **no backend changes**. **Steps 1–9 done + R1–R5 done**;
-Step 10 (deploy — single-origin Django/whitenoise) and R6 (React
-Personnel matrix) are the open fronts. Migrations:
+lifecycle; **no backend changes**) → R6 React Personnel matrix
+(`PersonnelPage.jsx` + scoped `PersonnelMatrix.css`; district/muni/view
+filters, two-row MANAGERIAL/SKILLS banded header with NO rowspan,
+triple-sticky layout — frozen Name + frozen actions + two-row header +
+nested-sticky band labels, verified via measured
+`getBoundingClientRect()` deltas across 3 scroll positions; all identity
+fields + 27 training cells inline-editable, modal New Personnel,
+archive/restore; **no backend changes**). **Steps 1–9 done + R1–R6
+done**; Step 10 (deploy — single-origin Django/whitenoise) and R7
+(Archived tabbed page + cutover: delete the Django template frontend,
+point `/` at the React build) are the open fronts. Migrations:
 `core/0001`–`core/0005` (unchanged since Step 6c). Test suite: 199
 passing (Django; the React frontend has no test suite yet). Remote
 `origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main`
