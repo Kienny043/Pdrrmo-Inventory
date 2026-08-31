@@ -23,11 +23,13 @@ doesn't need to reach into a sibling repo for its own spec.
   (equipment, staff, requests, training-event scheduling) — it has real
   near-term deadline pressure from the client; the rest of the module
   does not. See spec Section 0.
-- **No build step for v1** — plain Django templates + vanilla JS, no
-  React/Vite. Matches `quick-sitrep`'s and the original training-matrix
-  spec's approach: fastest path to something real. Integration into
-  `PDRRMO_v3`'s actual React frontend is explicitly a later concern
-  (spec Section 7, step 11).
+- **~~No build step for v1~~ — SUPERSEDED.** v1 shipped as plain Django
+  templates + vanilla JS (Steps 4 + 7) for speed, then the frontend was
+  rebuilt as a React 19 + Vite + Tailwind SPA across R1–R7 (matching
+  `PDRRMO_v3`'s design system) and the template layer was **deleted at
+  the R7 cutover**. There is a build step now (`frontend/`, `npm run
+  build` → `frontend/dist/`). Folding this SPA into `PDRRMO_v3`'s actual
+  app is still a later concern (spec Section 7, step 11).
 - Analytics (`InventoryAnalytics.jsx` and analytics endpoints) is
   **out of scope** for this rebuild, same as it was out of scope for
   the audit that fed the spec.
@@ -40,12 +42,12 @@ doesn't need to reach into a sibling repo for its own spec.
 | Layer          | Technology                                                   |
 | -------------- | ------------------------------------------------------------- |
 | Backend        | Python 3.13, Django 6.0.4, Django REST Framework 3.17.1      |
-| Auth           | DRF session auth (+ CSRF) for the real UI path; DRF basic auth added only so endpoints can be curl-tested without a login/CSRF dance |
+| Auth           | JWT (`djangorestframework-simplejwt` 5.5.1) for the React SPA — `POST /api/token/` + `/api/token/refresh/`; `SessionAuthentication` kept for the Django admin, `BasicAuthentication` for curl. 60-min access / 7-day refresh. |
 | Database       | SQLite (local dev, default) / PostgreSQL via `DATABASE_URL` (prod — `dj-database-url` 2.3.0, `psycopg2-binary` 2.9.10) |
-| Static files   | `whitenoise` 6.8.2 (`CompressedManifestStaticFilesStorage`)   |
-| Config         | `python-dotenv` 1.2.2, `.env`-based (`backend/.env`, gitignored; `backend/.env.example` checked in) |
-| Deployment     | `gunicorn` 23.0.0 (Render + external Postgres planned — same approach as `quick-sitrep`, spec Section 7 step 10) |
-| Frontend       | Plain Django templates + vanilla JS (no build step)           |
+| Static files   | `whitenoise` 6.8.2 (`CompressedManifestStaticFilesStorage`) for admin assets; also serves the built SPA (`WHITENOISE_ROOT = frontend/dist`) |
+| Config         | `python-dotenv` 1.2.2, `.env`-based (`backend/.env`, gitignored; `backend/.env.example` checked in). `django-cors-headers` 4.9.0 wired but env-gated + empty (single-origin deploy). |
+| Deployment     | `gunicorn` 23.0.0. **Single-origin:** Django + whitenoise serves `frontend/dist/` (`/` + `/assets/*` as real files, a SPA catch-all → `index.html` for client-side routes); no CORS. Render + external Postgres planned (spec Section 7 step 10). |
+| Frontend       | **React 19 + Vite 8 + Tailwind v4 SPA** (`frontend/`, own `package.json`; `react-router-dom` v7, `axios`, `lucide-react`). Design matches `PDRRMO_v3` per `docs/design-system-export.md`. Dev: Vite server proxies `/api` `/admin` `/media` to Django on `:8000`. *(The original plain-Django-templates + vanilla-JS frontend — Step 7 — was rebuilt in React across R1–R7 and deleted at R7; see below.)* |
 | Timezone       | `Asia/Manila`                                                 |
 
 No custom Django apps exist yet — `backend/apps/` is an empty package,
@@ -305,6 +307,14 @@ Work through these in order, confirming before moving to the next step.
       role-gated via `context_processors.role`; shared `common.js` /
       `common.css` helpers. Each sub-step verified with a headless
       Chromium click-through.
+      > **⚠ Superseded and removed.** This entire plain-template + vanilla-JS
+      > frontend (its `templates/`, `static/core/*.{js,css}`, `web_urls.py`,
+      > `context_processors.py`, and the page views in `views.py`) was
+      > rebuilt as a React SPA across R1–R7 and **deleted at the R7 cutover**.
+      > The 7a–7e detail below is kept as a historical record of what the
+      > pages did (behaviour the React versions match), not as a description
+      > of code that still exists. See "Frontend Rebuild (React) — Steps
+      > R1–R7" below.
   - [x] **7a. Shared infra + Categories + Staff.**
         - `static/core/common.js` → `window.App`: `api()` (fetch + CSRF;
           also sends `FormData` as multipart), `el()`, `setStatus(node,…)`,
@@ -495,17 +505,26 @@ Work through these in order, confirming before moving to the next step.
       users / Category / Item / workflow rows → back to the pristine
       20 Personnel / 73 TrainingRecords / 2 archived baseline.
 - [ ] 10. Deploy (Render + external Postgres, unless a faster option
-       makes more sense at that point)
+       makes more sense at that point). The single-origin serving
+       mechanism is already wired (`WHITENOISE_ROOT = frontend/dist`,
+       SPA catch-all) — a deploy needs the build/collectstatic/migrate
+       steps + Render config, nothing more in the app.
 - [ ] 11. *(Later, separate effort)* Integration into `PDRRMO_v3`'s
-       real React frontend and JWT/role system
+       real React frontend and JWT/role system. **Unchanged in scope by
+       the R1–R7 rebuild** — this project's React SPA being production
+       here does not fold it into `PDRRMO_v3`; that is still its own
+       later effort.
 
-## Frontend Rebuild (React) — Steps R1–R7
+## Frontend Rebuild (React) — Steps R1–R7  ·  **COMPLETE**
 
-A parallel track, started after Step 9: rebuild this project's frontend
-as a React SPA that visually matches `PDRRMO_v3`'s design system, while
-keeping the project standalone (own repo, own deploy). **This is not
-Step 11** — Step 11 (folding into `PDRRMO_v3` itself) is still a later,
-separate effort.
+A parallel track, run after Step 9: this project's frontend was rebuilt
+from plain Django templates + vanilla JS into a React 19 + Vite +
+Tailwind v4 SPA that visually matches `PDRRMO_v3`'s design system, while
+keeping the project standalone (own repo, own deploy). **All of R1–R7
+are done**, and at the R7 cutover the template frontend was deleted —
+the React SPA is now the only frontend, served single-origin by Django +
+whitenoise. **This is not Step 11** — folding into `PDRRMO_v3` itself is
+still a later, separate effort.
 
 **Authoritative design reference:** [docs/design-system-export.md](docs/design-system-export.md)
 — a one-time, self-contained snapshot of `PDRRMO_v3/frontend`'s visual
@@ -792,16 +811,31 @@ into `../PDRRMO_v3/`. It is a frozen snapshot, not a living reference.
         permanently` absent (count 0) on all 4 tabs for a non-elevated
         admin while `Restore` stays; no console errors. **No backend
         changes.**
-  - [ ] **R7 cutover.** Point `/` + deep links at the React build (Django
-        + whitenoise serving `frontend/dist/`, SPA catch-all to
-        `index.html`), then delete the Django template frontend:
-        `templates/`, `static/core/*.{js,css}`, `web_urls.py`, the 9 page
-        views, `context_processors.py`, the `accounts/` auth-urls
-        include, `LOGIN_URL`, and the 5 Step-7 page-shell test classes.
-        Full parity click-through of all 8 React pages + login (both
-        roles) + a single-origin smoke test + the full Django suite at
-        its new count — all before the deletions land, in one atomic
-        commit.
+  - [x] **R7 cutover — the React SPA is now the production frontend; the
+        Django template frontend is gone.** `config/settings.py`:
+        `FRONTEND_DIST` const, `TEMPLATES["DIRS"] = [FRONTEND_DIST]`,
+        `WHITENOISE_ROOT = frontend/dist` + `WHITENOISE_INDEX_FILE=True`,
+        removed `context_processors.role` and the vestigial
+        `LOGIN_URL` / `LOGIN_REDIRECT_URL` / `LOGOUT_REDIRECT_URL`.
+        `config/urls.py`: dropped the `web_urls` and `accounts/` includes;
+        added a last-pattern SPA catch-all
+        `re_path(r"^(?!api/|admin/|media/|static/).*$" → index.html)` so
+        direct loads / refreshes of client-side routes work. **Deleted
+        (24 files):** `apps/core/templates/` (10, incl.
+        `registration/login.html`), `apps/core/static/core/` (12
+        `*.{js,css}`), `apps/core/web_urls.py`, `apps/core/
+        context_processors.py`. `views.py`: the 9 page views removed
+        (`home_page`, `personnel_matrix_page`, …) + now-unused imports.
+        `tests.py`: the 5 `Step7*PageShellTests` classes removed (21
+        tests). Verified **before** the deletions landed: a 60/60 full
+        parity click-through of all 8 React pages + login (both roles, +
+        the non-elevated-admin permanent-delete gating); a single-origin
+        smoke test (`DEBUG=False`, `collectstatic`, `runserver :8090`) —
+        whitenoise serves `/` + `/assets/*`, the catch-all serves
+        `index.html` for every deep link + refresh, `/api/*` 401/200,
+        `/admin/` 302→login; browser check confirmed the SPA boots,
+        routes, and survives a deep-link refresh. Full Django suite:
+        **178** (199 − 21). `manage.py check` clean.
 
 ## Current Git State
 
@@ -858,14 +892,31 @@ triple-sticky layout — frozen Name + frozen actions + two-row header +
 nested-sticky band labels, verified via measured
 `getBoundingClientRect()` deltas across 3 scroll positions; all identity
 fields + 27 training cells inline-editable, modal New Personnel,
-archive/restore; **no backend changes**). **Steps 1–9 done + R1–R6
-done**; Step 10 (deploy — single-origin Django/whitenoise) and R7
-(Archived tabbed page + cutover: delete the Django template frontend,
-point `/` at the React build) are the open fronts. Migrations:
-`core/0001`–`core/0005` (unchanged since Step 6c). Test suite: 199
-passing (Django; the React frontend has no test suite yet). Remote
-`origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main`
-tracks `origin/main`.
+archive/restore; **no backend changes**) → R7 React Archived page
+(`ArchivedPage.jsx`, config-driven 4-tab layout, Restore for all admins,
+Delete-permanently gated on `can_permanently_delete`) → **R7 cutover:
+the React SPA is now the production frontend and the Django template
+frontend is deleted.** `settings.py` + `urls.py` serve `frontend/dist/`
+single-origin (whitenoise for `/` + `/assets/*`, a SPA catch-all →
+`index.html`); removed `context_processors.role` and
+`LOGIN_URL`/`LOGIN_REDIRECT_URL`/`LOGOUT_REDIRECT_URL`; deleted 24 files
+(`apps/core/templates/`, `apps/core/static/core/*.{js,css}`,
+`web_urls.py`, `context_processors.py`), the 9 page views, and the 5
+`Step7*PageShellTests` classes (21 tests). Landed as one atomic commit
+after a **60/60 full parity click-through** + a **single-origin smoke
+test** both passed.
+
+**The whole R1–R7 React rebuild is complete. Steps 1–9 done + R1–R7
+done.** Step 10 (deploy — Render + external Postgres; the single-origin
+serving mechanism is already wired) is the last build-order item. Step
+11 (fold this project's React frontend into `PDRRMO_v3`'s actual app +
+its role/JWT system) remains a later, separate effort — **unchanged in
+scope**; the SPA now being production here doesn't advance it. Migrations:
+`core/0001`–`core/0005` (unchanged since Step 6c). Test suite: **178
+passing** (199 − the 21 removed template-shell tests; the React frontend
+has no test suite — it's covered by the R1–R7 headless-Chromium runs).
+Remote `origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`;
+`main` tracks `origin/main`.
 
 Backend note — stock integrity (`apps/core/services.py`):
 `apply_stock_movement` is the ONLY path that changes

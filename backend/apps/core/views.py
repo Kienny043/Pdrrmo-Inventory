@@ -7,11 +7,9 @@ API views for the core app (spec Section 1 / 4).
   ``can_permanently_delete``).
 """
 
-from django.contrib.auth.decorators import login_required
 from django.db import IntegrityError, transaction
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.permissions import IsAuthenticated
@@ -101,96 +99,6 @@ def me(request):
             "can_permanently_delete": _can_permanently_delete(user),
         }
     )
-
-
-@login_required
-def home_page(request):
-    """Send each role to a page it can actually use."""
-    return redirect("personnel-matrix" if _is_admin(request.user) else "equipment-page")
-
-
-
-
-@login_required
-@ensure_csrf_cookie
-def personnel_matrix_page(request):
-    """Server-rendered shell for the personnel/training-matrix page (spec Section 5, page 1).
-
-    Renders only the shell + guarantees the CSRF cookie; all data is loaded
-    client-side from the DRF API. Non-admin users get a notice instead of the
-    grid (every /api/personnel/ route is ADMIN-only). ``is_admin`` comes from
-    the ``core.context_processors.role`` processor.
-    """
-    return render(request, "core/matrix.html")
-
-
-@login_required
-@ensure_csrf_cookie
-def categories_page(request):
-    """Shell for the Categories management page (spec Section 5, page 8). ADMIN-only."""
-    return render(request, "core/categories.html")
-
-
-@login_required
-@ensure_csrf_cookie
-def staff_page(request):
-    """Shell for the Staff management page (spec Section 5, page 3). ADMIN-only."""
-    return render(request, "core/staff.html")
-
-
-@login_required
-@ensure_csrf_cookie
-def equipment_page(request):
-    """Shell for the Equipment dashboard (spec Section 5, page 2).
-
-    STAFF may view the table (read-only) + export CSV; ADMIN also gets
-    add/edit/archive/holder-history. The template gates the buttons on the
-    context processor's ``is_admin``.
-    """
-    return render(request, "core/equipment.html")
-
-
-@login_required
-@ensure_csrf_cookie
-def movements_page(request):
-    """Shell for the Stock movements page (spec Section 5, page 4). ADMIN-only."""
-    return render(request, "core/movements.html")
-
-
-@login_required
-@ensure_csrf_cookie
-def requests_page(request):
-    """Shell for the Requests page (spec Section 5, page 5).
-
-    STAFF see and create only their own requests; ADMIN see all and can
-    approve/reject. The table gates the action column on ``is_admin``.
-    """
-    return render(request, "core/requests.html")
-
-
-@login_required
-@ensure_csrf_cookie
-def trainings_page(request):
-    """Shell for the Training schedules page (spec Section 5, page 6).
-
-    STAFF see active schedules + can register/cancel; ADMIN also get
-    create/edit/archive, the roster + attendance panel, and manual
-    attendees. Everything gates on the context processor's is_admin /
-    can_permanently_delete.
-    """
-    return render(request, "core/trainings.html")
-
-
-@login_required
-@ensure_csrf_cookie
-def archived_page(request):
-    """Shell for the Archived page (spec Section 5, page 7). ADMIN-only.
-
-    Tabbed view over Items / Staff / Trainings / Personnel archived records;
-    Restore for any admin, Permanent-delete only when
-    ``can_permanently_delete`` (the button is hidden, not disabled).
-    """
-    return render(request, "core/archived.html")
 
 
 class PersonnelViewSet(viewsets.ModelViewSet):

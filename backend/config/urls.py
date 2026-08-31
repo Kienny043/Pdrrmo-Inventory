@@ -1,33 +1,33 @@
-"""
-URL configuration for config project.
+"""Root URLconf.
 
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/6.0/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
+The frontend is a React SPA (``frontend/``). In production Django + whitenoise
+serves the built bundle from ``frontend/dist/`` (index.html + ``/assets/*``);
+in development the Vite server serves it and proxies ``/api`` + ``/admin`` here.
+Everything the SPA needs from Django is under ``/api/`` and ``/admin/``.
 """
+
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import include, path, re_path
+from django.views.generic import TemplateView
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('api/', include('apps.core.urls')),
-    path('accounts/', include('django.contrib.auth.urls')),
-    path('', include('apps.core.web_urls')),
+    path("admin/", admin.site.urls),
+    path("api/", include("apps.core.urls")),
 ]
 
-# Serve uploaded media (Staff photos, Item images) in local dev so the
-# React SPA can display them. Production serving is handled at the deploy
-# layer (Step 10 / R7).
+# Serve uploaded media (Staff photos, Item images) in local dev.
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+# SPA catch-all — anything not claimed above (and not served by whitenoise as a
+# real file) renders index.html so React Router handles the client-side route,
+# including direct loads and refreshes of deep links.
+urlpatterns += [
+    re_path(
+        r"^(?!api/|admin/|media/|static/).*$",
+        TemplateView.as_view(template_name="index.html"),
+        name="spa",
+    ),
+]

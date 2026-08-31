@@ -14,6 +14,10 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# The built React SPA (frontend/dist/). Django + whitenoise serves it in
+# production; the Vite dev server serves it in development.
+FRONTEND_DIST = BASE_DIR.parent / "frontend" / "dist"
+
 load_dotenv(BASE_DIR / ".env")
 
 
@@ -98,14 +102,14 @@ ROOT_URLCONF = "config.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
-        "APP_DIRS": True,
+        # frontend/dist so the SPA catch-all can render index.html.
+        "DIRS": [FRONTEND_DIST],
+        "APP_DIRS": True,  # still needed for the Django admin's templates
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
-                "apps.core.context_processors.role",
             ],
         },
     },
@@ -151,18 +155,19 @@ STORAGES = {
 }
 
 # The manifest storage above needs `collectstatic` to have run. For local dev
-# (DEBUG), fall back to plain storage so `{% static %}` resolves straight from
-# each app's static/ dir with no build step.
+# (DEBUG), fall back to plain storage so admin static resolves with no build.
 if DEBUG:
     STORAGES["staticfiles"]["BACKEND"] = (
         "django.contrib.staticfiles.storage.StaticFilesStorage"
     )
 
+# whitenoise also serves the built SPA (index.html + /assets/*) straight from
+# frontend/dist/; requests it can't satisfy fall through to the URLconf, where
+# the SPA catch-all renders index.html for client-side routes.
+WHITENOISE_ROOT = str(FRONTEND_DIST)
+WHITENOISE_INDEX_FILE = True
+
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-
-LOGIN_URL = "/accounts/login/"
-LOGIN_REDIRECT_URL = "/"
-LOGOUT_REDIRECT_URL = "/accounts/login/"
