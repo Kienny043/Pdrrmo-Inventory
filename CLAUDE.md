@@ -499,6 +499,94 @@ Work through these in order, confirming before moving to the next step.
 - [ ] 11. *(Later, separate effort)* Integration into `PDRRMO_v3`'s
        real React frontend and JWT/role system
 
+## Frontend Rebuild (React) — Steps R1–R7
+
+A parallel track, started after Step 9: rebuild this project's frontend
+as a React SPA that visually matches `PDRRMO_v3`'s design system, while
+keeping the project standalone (own repo, own deploy). **This is not
+Step 11** — Step 11 (folding into `PDRRMO_v3` itself) is still a later,
+separate effort.
+
+**Authoritative design reference:** [docs/design-system-export.md](docs/design-system-export.md)
+— a one-time, self-contained snapshot of `PDRRMO_v3/frontend`'s visual
+system (color tokens, fonts, component recipes, layout). Copied in
+(byte-identical to the PDRRMO_v3 copy) so this repo never needs to reach
+into `../PDRRMO_v3/`. It is a frozen snapshot, not a living reference.
+
+### Decisions locked in (so a future session doesn't re-derive them)
+
+- **Auth: JWT now** (`djangorestframework-simplejwt`), *not* deferred to
+  Step 11. `DEFAULT_AUTHENTICATION_CLASSES` = `[JWTAuthentication,
+  SessionAuthentication, BasicAuthentication]` — JWT leads for the SPA;
+  Session stays for the Django admin **and** the plain-template UI that
+  remains live until the R7 cutover; Basic stays for curl. Rationale:
+  the design export's own `apiFetch` is built around JWT refresh-on-401,
+  and Step 11 will be JWT anyway, so the auth layer is already in its
+  final shape. `SIMPLE_JWT`: 60-min access, 7-day refresh.
+- **Deploy shape: single-origin.** Production = Django + whitenoise
+  serves the built React bundle (matches the existing whitenoise setup
+  and `quick-sitrep`'s pattern), so no CORS/cross-site-cookie
+  complexity. `django-cors-headers` is wired but **env-gated and empty
+  by default** — a fallback for a hypothetical split-origin deploy, not
+  load-bearing. Dev = Vite server proxies `/api`, `/admin`, `/accounts`,
+  `/static`, `/media` to Django on `:8000` (single origin in dev too).
+- **Template UI stays alive through the whole rebuild**, deleted in one
+  pass at R7 — there is always a working UI during the transition.
+- **Component layer:** a thin set of primitives (`Button`, `Modal`,
+  `Table`, `Field`, `Badge`, `Tabs`, `PageHeader`, `Sidebar`,
+  `EmptyState`, `ErrorBanner`, `Spinner`, `ProtectedRoute`) that emit
+  the design export's *exact* class strings. This is a deliberate,
+  approved divergence from PDRRMO_v3's hand-composed-inline-per-page
+  convention (the source has no component library by choice).
+- **Icons:** `lucide-react` (the export notes it's visually near-identical
+  to PDRRMO_v3's hand-drawn SVGs).
+- **Validation:** native HTML `required` + an `ErrorBanner` for
+  submit-time/business errors, **plus** the inline per-field messages
+  the current vanilla-JS frontend already has — do not regress to bare
+  `alert()` like the source app.
+- **`GET /api/me/`** shape: `{ username, role, is_admin,
+  can_permanently_delete }` — the SPA's equivalent of
+  `context_processors.role`.
+- **Stack (matches the design export):** React 19 + Vite + Tailwind v4
+  (CSS-config, no `tailwind.config.js` — the `@theme` tokens live in
+  `frontend/src/index.css`), `react-router-dom` v7, `axios`. No icon kit
+  beyond lucide, no UI/component kit, no toast/animation/state library
+  (React Context only). `frontend/` is a sibling of `backend/`.
+
+### Sub-steps (same plan → build → browser-verify → commit cadence)
+
+- [x] **R1. Scaffold + backend auth prep.** `frontend/` (Vite + React 19
+      + Tailwind v4, `index.css` = design-export §1 verbatim, dev proxy,
+      `.env.example`, gitignores). Backend: `django-cors-headers`
+      (env-gated), SimpleJWT `POST /api/token/` + `/api/token/refresh/`,
+      `GET /api/me/`; `SessionAuthentication`/`BasicAuthentication` kept.
+      Behavior change: credential-less API requests now return **401**
+      (JWT supplies `WWW-Authenticate`), not the 403 that
+      session-auth-first produced — 401 is the correct code and what the
+      SPA's refresh-on-401 path needs; 3 existing "unauthenticated →
+      403" assertions updated to 401 (`ReferenceEndpointTests`,
+      `PersonnelPermissionTests`, `Step6aPermissionTests` — the
+      authenticated-but-forbidden 403s are unchanged). New tests:
+      `R1TokenAuthTests` + `R1MeEndpointTests` (11). Template UI verified
+      unaffected.
+- [ ] **R2. Shared infra + Login.** `AppLayout` + `Sidebar` +
+      `ProtectedRoute` + `AuthContext` + `lib/api.js` (axios wrapper:
+      bearer, refresh-on-401-once, DRF-error-detail → `Error.message`) +
+      the primitive components + the Login page. Router with all 9
+      routes → placeholder pages. Verify: log in as admin & staff1,
+      role-filtered sidebar, correct default route per role, logout.
+- [ ] **R3. Categories + Staff.**
+- [ ] **R4. Equipment + Stock movements.**
+- [ ] **R5. Requests + Trainings.** (May split R5a/R5b at build time if
+      Trainings is too big for one chunk — flag before proceeding past
+      the split, same as Steps 5/6/7.)
+- [ ] **R6. Personnel matrix.**
+- [ ] **R7. Archived + cutover.** Archived tabbed page, then delete the
+      Django template frontend (`templates/`, `static/core/*.{js,css}`,
+      `web_urls.py`, the page views, `context_processors.role`), point
+      `/` at the React build, update deploy config. Full parity
+      click-through of all 8 pages + login, both roles.
+
 ## Current Git State
 
 On branch `main`: `11c8a3c` scaffold → Step 2 reference-data → Step 3a/3b
@@ -516,11 +604,20 @@ lifecycle/audit fields read-only, StockMovement/ItemHolderLog view-only,
 Step 9 end-to-end testing (4 headless-Chromium workflow chains through
 the real UI, 86/86 assertions, **no code changed** — the chain-3
 negative case, Dennis Cruz staying blank after registering-without-
-attending, was the load-bearing assertion). **Steps 1–9 done**; Step 10
-(deploy — Render + external Postgres) is next. Migrations:
-`core/0001`–`core/0005` (Steps 8–9 added none). Test suite: 188 passing.
-Remote `origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`;
-`main` tracks `origin/main`.
+attending, was the load-bearing assertion) → a full UI/button audit that
+found + fixed 2 role-related frontend bugs (`common.css` `[hidden]`
+specificity; STAFF Equipment page broke on the ADMIN-only categories
+fetch) → **React frontend rebuild started (R1)**: `frontend/` Vite +
+React 19 + Tailwind v4 scaffold, `docs/design-system-export.md` copied
+in as the authoritative design reference, backend gains SimpleJWT
+(`/api/token/`, `/api/token/refresh/`) + `/api/me/` + env-gated
+`django-cors-headers` (SessionAuth/BasicAuth kept). **Steps 1–9 done +
+R1 done**; Step 10 (deploy — now single-origin: Django/whitenoise serves
+the React build) and R2 (React shared infra + Login) are the open
+fronts. Migrations: `core/0001`–`core/0005` (unchanged since Step 6c).
+Test suite: 199 passing. Remote `origin` is
+`https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
+`origin/main`.
 
 Backend note — stock integrity (`apps/core/services.py`):
 `apply_stock_movement` is the ONLY path that changes

@@ -1,0 +1,21 @@
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700&family=DM+Sans:wght@300;400;500&display=swap');
+@import "tailwindcss";
+
+/* PDRRMO Light Theme Colors — verbatim from docs/design-system-export.md §1 */
+@theme {
+  --color-pd-navy: #102B6A;
+  --color-pd-red: #D62828;
+  --color-pd-gold: #F4A300;
+  --color-pd-green: #1FAF38;
+  --color-pd-gray: #F0F2F5;
+  --color-pd-white: #FFFFFF;
+  --color-pd-text-primary: #0B1F3A;
+  --color-pd-text-secondary: #4B5563;
+  --color-pd-border: #D6DCE5;
+}
+
+body {
+  background-color: #F8F9FC;
+  color: var(--color-pd-text-primary);
+  font-family: 'DM Sans', sans-serif;
+}

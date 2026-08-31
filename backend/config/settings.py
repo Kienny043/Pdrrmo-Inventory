@@ -7,6 +7,7 @@ the full build spec this project follows.
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 import dj_database_url
@@ -33,6 +34,18 @@ ALLOWED_HOSTS = [
     h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "").split(",") if h.strip()
 ]
 
+# CORS / CSRF for a split-origin frontend. The planned production deploy is
+# single-origin (Django + whitenoise serves the built React bundle), so these
+# are empty by default and act only as an env-gated fallback. In dev the Vite
+# server proxies /api to Django, so no CORS is needed there either.
+CORS_ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
+]
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -40,17 +53,21 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "corsheaders",
     "rest_framework",
     # apps.* modules are added here as the build order (spec Section 7)
     # reaches them.
     "apps.core",
 ]
 
-# Session auth (+ CSRF) is the real path for the plain-template/vanilla-JS
-# UI (spec Section 5). Basic auth is added only so endpoints can be
-# exercised with curl during development without a login/CSRF dance.
+# Auth paths, in order tried:
+#  - JWT (Authorization: Bearer ...) — the React SPA (rebuild step R1+).
+#  - Session (+ CSRF) — the Django admin and the plain-template/vanilla-JS
+#    UI that stays live until the React rebuild's cutover (step R7).
+#  - Basic — so endpoints can be curl-tested without a login/CSRF dance.
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
@@ -59,8 +76,14 @@ REST_FRAMEWORK = {
     ],
 }
 
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+}
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",

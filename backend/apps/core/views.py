@@ -37,6 +37,7 @@ from .permissions import (
     CanPermanentlyDelete,
     IsAdmin,
     IsAdminOrReadOnly,
+    _can_permanently_delete,
     _is_admin,
 )
 from .serializers import (
@@ -82,6 +83,24 @@ def training_catalog_list(request):
         for key, label, group in reference.training_catalog_rows()
     ]
     return Response(data)
+
+
+@api_view(["GET"])
+def me(request):
+    """GET /api/me/ — the current user's identity + role flags for the SPA.
+
+    The React equivalent of the ``context_processors.role`` template hook.
+    """
+    user = request.user
+    is_admin = _is_admin(user)
+    return Response(
+        {
+            "username": user.username,
+            "role": Role.ADMIN if is_admin else Role.STAFF,
+            "is_admin": is_admin,
+            "can_permanently_delete": _can_permanently_delete(user),
+        }
+    )
 
 
 @login_required

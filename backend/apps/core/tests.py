@@ -146,9 +146,11 @@ class ReferenceEndpointTests(TestCase):
         self.assertEqual([r["group"] for r in body].count("SKILLS"), 12)
 
     def test_endpoints_require_authentication(self):
+        # 401 (not 403) since JWTAuthentication leads DEFAULT_AUTHENTICATION_CLASSES
+        # and supplies a WWW-Authenticate header for credential-less requests.
         anon = APIClient()
-        self.assertEqual(anon.get("/api/municipalities/").status_code, 403)
-        self.assertEqual(anon.get("/api/training-catalog/").status_code, 403)
+        self.assertEqual(anon.get("/api/municipalities/").status_code, 401)
+        self.assertEqual(anon.get("/api/training-catalog/").status_code, 401)
 
 
 class PersonnelModelTests(TestCase):
@@ -263,7 +265,8 @@ class PersonnelPermissionTests(TestCase):
         return c
 
     def test_unauthenticated_blocked(self):
-        self.assertEqual(self._client().get("/api/personnel/").status_code, 403)
+        # 401 since JWTAuthentication now leads the auth-class list (R1).
+        self.assertEqual(self._client().get("/api/personnel/").status_code, 401)
 
     def test_staff_blocked_on_every_route(self):
         c = self._client(self.staff)
@@ -922,10 +925,11 @@ class Step6aPermissionTests(TestCase):
         )
 
     def test_unauthenticated_blocked_everywhere(self):
+        # 401 since JWTAuthentication now leads the auth-class list (R1).
         anon = APIClient()
-        self.assertEqual(anon.get("/api/categories/").status_code, 403)
-        self.assertEqual(anon.get("/api/staff/").status_code, 403)
-        self.assertEqual(anon.get("/api/items/").status_code, 403)
+        self.assertEqual(anon.get("/api/categories/").status_code, 401)
+        self.assertEqual(anon.get("/api/staff/").status_code, 401)
+        self.assertEqual(anon.get("/api/items/").status_code, 401)
 
 
 class Step6aArchiveLifecycleTests(TestCase):
@@ -2003,3 +2007,108 @@ class Step8AdminTests(TestCase):
         r = self.c.get(f"/admin/auth/user/{self.root.pk}/change/")
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "can_permanently_delete")
+
+
+# --------------------------------------------------------------------------
+# R1 — SPA auth endpoints: JWT token pair/refresh + /api/me/
+# --------------------------------------------------------------------------
+
+
+class R1TokenAuthTests(TestCase):
+    def setUp(self):
+        self.staff = make_user("r1staff", role=Role.STAFF)
+        self.staff.set_password("pw")
+        self.staff.save()
+
+    def test_token_obtain_with_valid_credentials(self):
+        c = APIClient()
+        r = c.post("/api/token/", {"username": "r1staff", "password": "pw"}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("access", r.data)
+        self.assertIn("refresh", r.data)
+
+    def test_token_obtain_with_bad_credentials_401(self):
+        c = APIClient()
+        r = c.post("/api/token/", {"username": "r1staff", "password": "nope"}, format="json")
+        self.assertEqual(r.status_code, 401)
+
+    def test_token_refresh_returns_a_new_access_token(self):
+        c = APIClient()
+        pair = c.post("/api/token/", {"username": "r1staff", "password": "pw"}, format="json").data
+        r = c.post("/api/token/refresh/", {"refresh": pair["refresh"]}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("access", r.data)
+
+    def test_bearer_access_token_authenticates_a_protected_endpoint(self):
+        c = APIClient()
+        access = c.post(
+            "/api/token/", {"username": "r1staff", "password": "pw"}, format="json"
+        ).data["access"]
+        c.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        r = c.get("/api/municipalities/")
+        self.assertEqual(r.status_code, 200)
+
+
+class R1MeEndpointTests(TestCase):
+    def _me(self, user):
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c.get("/api/me/")
+
+    def test_me_requires_authentication(self):
+        r = APIClient().get("/api/me/")
+        self.assertIn(r.status_code, (401, 403))
+
+    def test_me_shape_for_staff(self):
+        r = self._me(make_user("mestaff", role=Role.STAFF))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            set(r.data.keys()),
+            {"username", "role", "is_admin", "can_permanently_delete"},
+        )
+        self.assertEqual(r.data["username"], "mestaff")
+        self.assertEqual(r.data["role"], Role.STAFF)
+        self.assertFalse(r.data["is_admin"])
+        self.assertFalse(r.data["can_permanently_delete"])
+
+    def test_me_shape_for_admin_without_delete_flag(self):
+        r = self._me(make_user("meadmin", role=Role.ADMIN))
+        self.assertEqual(r.data["role"], Role.ADMIN)
+        self.assertTrue(r.data["is_admin"])
+        self.assertFalse(r.data["can_permanently_delete"])
+
+    def test_me_shape_for_elevated_admin(self):
+        r = self._me(make_user("medel", role=Role.ADMIN, can_delete=True))
+        self.assertTrue(r.data["is_admin"])
+        self.assertTrue(r.data["can_permanently_delete"])
+
+    def test_me_shape_for_superuser(self):
+        r = self._me(make_user("meroot", superuser=True))
+        self.assertEqual(r.data["role"], Role.ADMIN)
+        self.assertTrue(r.data["is_admin"])
+        self.assertTrue(r.data["can_permanently_delete"])
+
+    def test_me_works_over_session_auth_too(self):
+        # SessionAuthentication is kept alongside JWT for the Django admin
+        # and the template UI that survives until the R7 cutover.
+        from django.test import Client
+
+        u = make_user("mesession", role=Role.ADMIN)
+        c = Client()
+        c.force_login(u)
+        r = c.get("/api/me/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["username"], "mesession")
+
+    def test_me_works_over_bearer_token(self):
+        u = make_user("mebearer", role=Role.STAFF)
+        u.set_password("pw")
+        u.save()
+        c = APIClient()
+        access = c.post(
+            "/api/token/", {"username": "mebearer", "password": "pw"}, format="json"
+        ).data["access"]
+        c.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        r = c.get("/api/me/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["username"], "mebearer")

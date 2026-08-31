@@ -2,6 +2,7 @@
 
 from django.urls import path
 from rest_framework.routers import SimpleRouter
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from . import views
 
@@ -22,6 +23,11 @@ manual_attendee_detail = _ma.as_view({"delete": "destroy"})
 manual_attendee_attendance = _ma.as_view({"patch": "set_attendance"})
 
 urlpatterns = [
+    # --- auth for the React SPA ---
+    path("token/", TokenObtainPairView.as_view(), name="token-obtain-pair"),
+    path("token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
+    path("me/", views.me, name="me"),
+    # --- reference data ---
     path("municipalities/", views.municipalities_list, name="municipalities-list"),
     path("training-catalog/", views.training_catalog_list, name="training-catalog-list"),
     path(
