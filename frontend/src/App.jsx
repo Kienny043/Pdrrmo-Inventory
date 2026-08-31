@@ -1,32 +1,55 @@
-import { PackageSearch } from 'lucide-react'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider, useAuth, defaultRouteFor } from './lib/auth'
+import ProtectedRoute from './components/ProtectedRoute'
+import AppLayout from './components/AppLayout'
+import { FullScreenSpinner } from './components/Spinner'
 
-// R1 placeholder shell — proves the design tokens, fonts, Tailwind v4
-// pipeline and lucide-react all resolve. The real layout, router, auth
-// and pages arrive from R2 onward.
+import LoginPage from './pages/LoginPage'
+import PersonnelPage from './pages/PersonnelPage'
+import CategoriesPage from './pages/CategoriesPage'
+import StaffPage from './pages/StaffPage'
+import EquipmentPage from './pages/EquipmentPage'
+import MovementsPage from './pages/MovementsPage'
+import RequestsPage from './pages/RequestsPage'
+import TrainingsPage from './pages/TrainingsPage'
+import ArchivedPage from './pages/ArchivedPage'
+
+function RootRedirect() {
+  const { user, isLoading } = useAuth()
+  if (isLoading) return <FullScreenSpinner />
+  return <Navigate to={user ? defaultRouteFor(user) : '/login'} replace />
+}
+
 export default function App() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-pd-gray px-4">
-      <div className="bg-white border border-pd-border rounded-2xl shadow-sm p-10 max-w-md text-center">
-        <div className="w-12 h-12 rounded-full bg-pd-navy/10 text-pd-navy flex items-center justify-center mx-auto mb-4">
-          <PackageSearch size={24} />
-        </div>
-        <h1
-          className="text-xl font-bold text-pd-navy"
-          style={{ fontFamily: "'Sora', sans-serif" }}
-        >
-          Inventory &amp; Training Matrix
-        </h1>
-        <p className="text-sm text-pd-text-secondary mt-2">
-          React frontend scaffold (R1). Design tokens, fonts and the dev API
-          proxy are wired up; pages land in R2 onward.
-        </p>
-        <div className="flex justify-center gap-2 mt-6">
-          <span className="w-4 h-4 rounded-full bg-pd-navy" />
-          <span className="w-4 h-4 rounded-full bg-pd-red" />
-          <span className="w-4 h-4 rounded-full bg-pd-gold" />
-          <span className="w-4 h-4 rounded-full bg-pd-green" />
-        </div>
-      </div>
-    </div>
+    <BrowserRouter>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+
+          {/* authenticated shell */}
+          <Route element={<ProtectedRoute />}>
+            <Route element={<AppLayout />}>
+              {/* both roles */}
+              <Route path="/equipment" element={<EquipmentPage />} />
+              <Route path="/requests" element={<RequestsPage />} />
+              <Route path="/trainings" element={<TrainingsPage />} />
+
+              {/* ADMIN only */}
+              <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
+                <Route path="/personnel" element={<PersonnelPage />} />
+                <Route path="/categories" element={<CategoriesPage />} />
+                <Route path="/staff" element={<StaffPage />} />
+                <Route path="/movements" element={<MovementsPage />} />
+                <Route path="/archived" element={<ArchivedPage />} />
+              </Route>
+            </Route>
+          </Route>
+
+          <Route path="/" element={<RootRedirect />} />
+          <Route path="*" element={<RootRedirect />} />
+        </Routes>
+      </AuthProvider>
+    </BrowserRouter>
   )
 }

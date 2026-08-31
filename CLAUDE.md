@@ -569,12 +569,43 @@ into `../PDRRMO_v3/`. It is a frozen snapshot, not a living reference.
       authenticated-but-forbidden 403s are unchanged). New tests:
       `R1TokenAuthTests` + `R1MeEndpointTests` (11). Template UI verified
       unaffected.
-- [ ] **R2. Shared infra + Login.** `AppLayout` + `Sidebar` +
-      `ProtectedRoute` + `AuthContext` + `lib/api.js` (axios wrapper:
-      bearer, refresh-on-401-once, DRF-error-detail → `Error.message`) +
-      the primitive components + the Login page. Router with all 9
-      routes → placeholder pages. Verify: log in as admin & staff1,
-      role-filtered sidebar, correct default route per role, logout.
+- [x] **R2. Shared infra + Login.** `frontend/src/` — `lib/tokens.js`
+      (localStorage access/refresh), `lib/api.js` (axios: bearer on every
+      request; response interceptor refreshes once on 401 via bare axios,
+      retries the original, else `clearTokens()` + fires the registered
+      auth-failure handler; DRF error body → `Error(message)` + `.status`/
+      `.data`; `apiGet/Post/Patch/Delete` helpers), `lib/auth.jsx`
+      (`AuthProvider`/`useAuth` → `{user,isLoading,login,logout}`, `user`
+      from `GET /api/me/` on login and on app-load-if-token;
+      `defaultRouteFor` mirrors backend `home_page`). Primitive component
+      layer emitting the design export's **exact** class strings:
+      `Button` (primary/secondary/chip, no red variant), `TextAction`
+      (navy/red/green/muted + optional `confirm`), `Card`, `StatTile`,
+      `Table`/`THead`/`Th`/`Tr`/`Td`, `Modal` (md/xl/2xl), `Field` +
+      `INPUT_CLASS` + `SearchInput` (Field keeps an optional per-field
+      `error` — decision #5), `Badge` (§2 status→class map + our
+      training enums), `Tabs`, `Spinner`/`LoadingSection`/
+      `FullScreenSpinner`, `EmptyState`, `ErrorBanner`, `PageHeader` +
+      `PageBody`, `Sidebar` (navy, role-filtered nav via `nav.js` in the
+      exact `core/base.html` order, initials avatar, sign-out),
+      `AppLayout` (§3 Variant A), `ProtectedRoute` (`allowedRoles`,
+      `requireCanDelete`), `PlaceholderPage`. `LoginPage` (real form →
+      `/api/token/`, `ErrorBanner` on failure, redirect via
+      `defaultRouteFor`). `App.jsx` router: `/login` public; all else
+      under `ProtectedRoute` → `AppLayout`, with the 5 ADMIN pages nested
+      under a second `ProtectedRoute allowedRoles={['ADMIN']}`; `/` + `*`
+      role-redirect. 8 pages are placeholders (real content R3–R6).
+      **Confirmed design decision:** a STAFF user hitting an ADMIN-only
+      route by direct URL is **silently redirected** to their default
+      page (`/equipment`), not shown an in-page notice — a deliberate
+      divergence from the Django template, matching the design export's
+      §3 `ProtectedRoute` pattern (the role-filtered sidebar never links
+      there anyway). Verified headless: admin→8-link sidebar→`/personnel`;
+      staff1→3-link sidebar→`/equipment`, `/personnel` & `/archived`
+      bounce to `/equipment`; full reload keeps the session; bad creds →
+      `ErrorBanner`, no crash; refresh-on-401 proven (corrupt access +
+      valid refresh → transparent re-auth; both corrupt → forced logout).
+      **No backend changes.**
 - [ ] **R3. Categories + Staff.**
 - [ ] **R4. Equipment + Stock movements.**
 - [ ] **R5. Requests + Trainings.** (May split R5a/R5b at build time if
@@ -611,13 +642,17 @@ fetch) → **React frontend rebuild started (R1)**: `frontend/` Vite +
 React 19 + Tailwind v4 scaffold, `docs/design-system-export.md` copied
 in as the authoritative design reference, backend gains SimpleJWT
 (`/api/token/`, `/api/token/refresh/`) + `/api/me/` + env-gated
-`django-cors-headers` (SessionAuth/BasicAuth kept). **Steps 1–9 done +
-R1 done**; Step 10 (deploy — now single-origin: Django/whitenoise serves
-the React build) and R2 (React shared infra + Login) are the open
-fronts. Migrations: `core/0001`–`core/0005` (unchanged since Step 6c).
-Test suite: 199 passing. Remote `origin` is
-`https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
-`origin/main`.
+`django-cors-headers` (SessionAuth/BasicAuth kept) → R2 React shared
+infra (`frontend/src/{lib,components,pages}`, `App.jsx` router,
+`AuthContext` + `lib/api.js` refresh-on-401, the primitive component
+layer, role-filtered `Sidebar`, `ProtectedRoute`, `LoginPage`; 8 pages
+still placeholders; **no backend changes**). **Steps 1–9 done + R1–R2
+done**; Step 10 (deploy — single-origin Django/whitenoise) and R3
+(React Categories + Staff pages) are the open fronts. Migrations:
+`core/0001`–`core/0005` (unchanged since Step 6c). Test suite: 199
+passing (Django; the React frontend has no test suite yet). Remote
+`origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main`
+tracks `origin/main`.
 
 Backend note — stock integrity (`apps/core/services.py`):
 `apply_stock_movement` is the ONLY path that changes
