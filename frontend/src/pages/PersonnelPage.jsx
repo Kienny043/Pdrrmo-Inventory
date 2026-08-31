@@ -120,12 +120,15 @@ export default function PersonnelPage() {
   const archived = view === 'archived'
   const showMunicipality = !municipality
 
-  // reference data (once)
+  // reference data (once). Default the district to the first one the API
+  // returns (First District) so the matrix shows data on open instead of an
+  // empty "pick a district" state.
   useEffect(() => {
     Promise.all([apiGet('/api/training-catalog/'), apiGet('/api/municipalities/')])
       .then(([cat, muni]) => {
         setCatalog(cat)
         setMunicipalities(muni)
+        setDistrict((cur) => cur || muni[0]?.district || '')
         setRefLoaded(true)
       })
       .catch((e) => setStatus({ text: `Failed to load reference data: ${e.message}`, kind: 'err' }))
@@ -314,7 +317,9 @@ export default function PersonnelPage() {
           )}
         </div>
 
-        {!district ? (
+        {!refLoaded || (!district && loading) ? (
+          <LoadingSection />
+        ) : !district ? (
           <p className="text-center text-pd-text-secondary py-24">Select a district to load the matrix.</p>
         ) : loading ? (
           <LoadingSection />
