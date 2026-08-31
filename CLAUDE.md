@@ -699,15 +699,43 @@ into `../PDRRMO_v3/`. It is a frozen snapshot, not a living reference.
         Approve → inline row error + stays PENDING + no partial deduction,
         decided rows have no controls; no console errors; screenshot
         matches the design system.
-  - [ ] **R5b. Trainings.** Schedule list/table; ADMIN create/edit modal
-        with a MANAGERIAL/SKILLS `<optgroup>` catalog select + archive/
-        restore/permanent-delete; STAFF Register/Cancel per row with the
-        specific blocker reason shown (archived / wrong status / past
-        deadline / full / already registered); ADMIN expandable panel —
-        registrations roster with an attendance toggle showing
-        matrix-bridge feedback (`matrix_updated` + reason) and a
-        manual-attendee sub-table (list/add/delete/attendance) marked as
-        NOT feeding the matrix.
+  - [x] **R5b. Trainings.** `TrainingsPage.jsx` (R2 primitives only; no
+        backend changes). `Table` title/dates/venue/`Badge` status/matrix
+        label/slots/deadline/regs + actions. **Register/Cancel per row
+        (both roles):** `registerBlock(t)` computes all 5 blockers
+        client-side — archived / `registration closed (<status>)` /
+        deadline passed / full / already-registered; a blocked row shows
+        a struck "Register" + the reason, an already-registered row shows
+        red "Cancel registration" + a `you: REGISTERED` hint, else an
+        enabled navy "Register"; a server 409 `detail` surfaces in a
+        per-row `text-pd-red` line (the 5th blocker's *string* is
+        superseded by the Cancel button, faithful to the template — the
+        guard itself is server-enforced, verified via the 409). ADMIN
+        active-view row: Details(toggle) / Edit / Archive; archived-view:
+        Restore / Delete (only when `can_permanently_delete`). Create/
+        edit `Modal` (`TrainingForm`, `key`-remounted) — status `<select>`
+        + a matrix-key `<select>` with `<optgroup>` MANAGERIAL / SKILLS
+        from `/api/training-catalog/` + a `— none —` option. **Expandable
+        ADMIN panel (`RosterPanel`, `<td colspan=9>`):** registrations
+        sub-`Table` with an **optimistic** attendance checkbox (flips
+        synchronously, reverts on error) → `PATCH …/attendance/<user_id>/`,
+        per-row note from the response (`✓ matrix updated` /
+        `matrix not updated — <reason>` / `attendance cleared`); manual-
+        attendees sub-`Table` (list/add w/ municipality+affiliation
+        `<select>`s / delete / optimistic attendance toggle) prefaced by
+        a static "**do not feed the training matrix**" note. Optimistic
+        checkboxes are a deliberate UX improvement over the template's
+        re-fetch-only toggle. Verified headless 42/42: all 5 STAFF
+        blockers + register/cancel/re-register-no-dup + 409 double-
+        register; ADMIN create-with-matrix-key (optgroups) / edit;
+        roster matrix-bridge for a linked user (`✓`) and an unlinked one
+        (reason), **cross-checked against the real `/api/personnel/`**
+        (Josie Navarro's RDANA cell → 2026), un-mark-doesn't-delete
+        invariant, re-tick → still exactly one record; manual attendee
+        add (computed district) / attendance / delete; full archive →
+        archived-view (blocker #1 shows there) → restore → re-archive →
+        permanent-delete → 404. No console errors; screenshot matches
+        the design system.
 - [ ] **R6. Personnel matrix.**
 - [ ] **R7. Archived + cutover.** Archived tabbed page, then delete the
       Django template frontend (`templates/`, `static/core/*.{js,css}`,
@@ -755,11 +783,17 @@ holder-history modal; inline insufficient-stock error on the movements
 form; **no backend changes**) → R5a React Requests page (server-scoped
 list, PENDING-only Approve/Reject with an inline per-row insufficient-
 stock error, decided rows render zero controls; **no backend changes**).
-R5 was **split into R5a (Requests, done) + R5b (Trainings, open)** —
-Requests/Trainings share no surface and Trainings is the app's biggest
-page (its own cycle, like Step 7d). **Steps 1–9 done + R1–R4 + R5a
-done**; Step 10 (deploy — single-origin Django/whitenoise) and R5b
-(React Trainings page) are the open fronts. Migrations:
+R5 was **split into R5a (Requests) + R5b (Trainings)** — Requests/
+Trainings share no surface and Trainings is the app's biggest page (its
+own cycle, like Step 7d); **both sub-steps now done**. R5b: full
+Trainings page — client-side 5-blocker register gating (server 409
+backup), expandable roster panel with matrix-bridge feedback per
+attendance toggle (optimistic UI, cross-checked against the real
+`/api/personnel/` in testing), manual-attendees sub-table marked as not
+feeding the matrix, catalog-grouped create/edit modal, full archive
+lifecycle; **no backend changes**. **Steps 1–9 done + R1–R5 done**;
+Step 10 (deploy — single-origin Django/whitenoise) and R6 (React
+Personnel matrix) are the open fronts. Migrations:
 `core/0001`–`core/0005` (unchanged since Step 6c). Test suite: 199
 passing (Django; the React frontend has no test suite yet). Remote
 `origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main`
