@@ -32,6 +32,9 @@ const STATUS_CLASS = {
   // item holder log action
   ASSIGNED: 'bg-green-100 text-green-700',
   REMOVED: 'bg-red-100 text-red-700',
+  // stock movement type
+  IN: 'bg-green-100 text-green-700',
+  OUT: 'bg-blue-100 text-blue-700',
 }
 
 const FALLBACK = 'bg-pd-gray text-pd-text-secondary'

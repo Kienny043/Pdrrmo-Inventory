@@ -635,7 +635,40 @@ into `../PDRRMO_v3/`. It is a frozen snapshot, not a living reference.
       `naturalWidth > 0`) / remove-photo-clears-it / edit-persists /
       archive-is-soft for Staff; no console errors; screenshots match
       the design system.
-- [ ] **R4. Equipment + Stock movements.**
+- [x] **R4. Equipment + Stock movements.** `EquipmentPage.jsx` — `Table`
+      (name/brand/category/qty/unit/`Badge` condition/holder/remarks/
+      acquired + actions), `SearchInput` name/brand substring filter + a
+      category `<select>`. **Role-aware category filter (the audit fix,
+      reimplemented in React):** ADMIN options come from `/api/categories/`
+      (value = id); STAFF options are derived from distinct
+      `item.category_name` (value = name) and `/api/categories/` is not
+      fetched at all for STAFF — so the STAFF equipment page can't break
+      on the ADMIN-only categories endpoint. `Export CSV` (both roles;
+      `lib/csv.js`) exports the visible rows, columns name,brand,
+      category,quantity,unit,condition,holder,date_acquired,remarks.
+      ADMIN-only: `+ New Item` / Edit `Modal` (`ItemForm`, `key`-remounted)
+      — category/holder(`/api/staff/`)/condition selects + image file;
+      saves scalars/FKs as JSON then a follow-up `FormData` PATCH for the
+      image (avoids the multipart-null-FK problem, mirrors the template);
+      **quantity `<input>` `disabled` on edit** and omitted from the edit
+      payload. Per-row `TextAction` Edit / History / Archive(`confirm`);
+      Holder-history `Modal` → `GET /api/items/<id>/holder-history/`,
+      newest-first. `MovementsPage.jsx` — ADMIN-only (route-gated):
+      `Card`-wrapped record form (item select w/ "on hand: N", type,
+      quantity, note → `POST /api/movements/add/`); a 400 renders the
+      server message in an **`ErrorBanner` inside the form** (persistent,
+      not a toast); `?item=` filter select + movement-log `Table`.
+      New shared helper `lib/csv.js` (`downloadCsv`); `Badge` map gained
+      `IN` (green) / `OUT` (blue) for stock-movement type. **No backend
+      changes.** Verified headless: 41/41 — Equipment ADMIN
+      create-with-image / edit-quantity-disabled / category+search
+      filters / holder-history newest-first / CSV columns+rows / archive;
+      Equipment STAFF table loads (audit bug absent) + category filter
+      from `category_name` + no admin buttons + CSV works; Movements
+      ADMIN IN/OUT with on-hand reflected on the Equipment page after
+      reload + inline insufficient-stock error + `?item=` filter;
+      Movements STAFF redirects to `/equipment`; no console errors;
+      screenshots match the design system.
 - [ ] **R5. Requests + Trainings.** (May split R5a/R5b at build time if
       Trainings is too big for one chunk — flag before proceeding past
       the split, same as Steps 5/6/7.)
@@ -679,9 +712,13 @@ Staff pages (real content replacing the placeholders; "Remove current
 photo" is now a conditional render so the DOM node is absent when there
 is no photo — closes UI-audit Finding 1 structurally; backend gains a
 **DEBUG-only** `/media/` route in `config/urls.py` for dev photo
-thumbnails). **Steps 1–9 done + R1–R3 done**; Step 10 (deploy —
-single-origin Django/whitenoise) and R4 (React Equipment + Stock
-movements pages) are the open fronts. Migrations:
+thumbnails) → R4 React Equipment + Stock movements pages (role-aware
+category filter — the STAFF audit fix reimplemented; CSV export via new
+`lib/csv.js`; image upload as JSON + follow-up FormData PATCH;
+holder-history modal; inline insufficient-stock error on the movements
+form; **no backend changes**). **Steps 1–9 done + R1–R4 done**; Step 10
+(deploy — single-origin Django/whitenoise) and R5 (React Requests +
+Trainings pages) are the open fronts. Migrations:
 `core/0001`–`core/0005` (unchanged since Step 6c). Test suite: 199
 passing (Django; the React frontend has no test suite yet). Remote
 `origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main`
