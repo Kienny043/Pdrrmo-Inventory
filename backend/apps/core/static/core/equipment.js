@@ -25,8 +25,10 @@
   var staff = [];
 
   function load() {
-    var jobs = [api("GET", "/api/items/"), api("GET", "/api/categories/")];
-    if (canEdit) jobs.push(api("GET", "/api/staff/"));
+    // Categories + staff are ADMIN-only endpoints. STAFF just needs the items;
+    // its category filter is derived from each item's category_name below.
+    var jobs = [api("GET", "/api/items/")];
+    if (canEdit) jobs.push(api("GET", "/api/categories/"), api("GET", "/api/staff/"));
     return Promise.all(jobs)
       .then(function (res) {
         items = res[0] || [];
@@ -34,9 +36,19 @@
         staff = res[2] || [];
         var current = els.category.value;
         els.category.innerHTML = '<option value="">All categories</option>';
-        categories.forEach(function (c) {
-          els.category.append(el("option", { value: String(c.id), text: c.name }));
-        });
+        if (canEdit) {
+          categories.forEach(function (c) {
+            els.category.append(el("option", { value: String(c.id), text: c.name }));
+          });
+        } else {
+          var seen = {};
+          items.forEach(function (it) {
+            if (it.category_name && !seen[it.category_name]) seen[it.category_name] = true;
+          });
+          Object.keys(seen).sort().forEach(function (name) {
+            els.category.append(el("option", { value: name, text: name }));
+          });
+        }
         els.category.value = current;
         render();
       })
@@ -47,7 +59,9 @@
     var cat = els.category.value;
     var q = els.search.value.trim().toLowerCase();
     return items.filter(function (it) {
-      if (cat && String(it.category) !== cat) return false;
+      // ADMIN filter option values are category ids; STAFF's are category names.
+      var itCat = canEdit ? String(it.category) : (it.category_name || "");
+      if (cat && itCat !== cat) return false;
       if (q) {
         var hay = ((it.name || "") + " " + (it.brand || "")).toLowerCase();
         if (hay.indexOf(q) === -1) return false;
