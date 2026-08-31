@@ -606,7 +606,35 @@ into `../PDRRMO_v3/`. It is a frozen snapshot, not a living reference.
       `ErrorBanner`, no crash; refresh-on-401 proven (corrupt access +
       valid refresh → transparent re-auth; both corrupt → forced logout).
       **No backend changes.**
-- [ ] **R3. Categories + Staff.**
+- [x] **R3. Categories + Staff.** `CategoriesPage.jsx` — `Table` with an
+      inline add-row (name + description → `POST /api/categories/`,
+      Enter-to-submit, Add disabled while name blank) and per-row
+      blur-to-save inline `<input>` edits (`PATCH`, revert + `ErrorBanner`
+      on failure), `item_count` cell, red `TextAction` "Delete" with
+      `confirm`; a 409 (category still has items) surfaces the server
+      message verbatim in an `ErrorBanner`. `StaffPage.jsx` — `Table`
+      (photo thumbnail / name / position / department / contact / `Badge`
+      status / state / actions) + a `Modal` create/edit form
+      (`StaffForm`, remounted per open via `key`) posting multipart
+      `FormData` (text fields + optional `photo` + `remove_photo`);
+      per-row `TextAction` Edit / Archive(`confirm`). **The "Remove
+      current photo" checkbox is `{editing && staff.photo && …}` —
+      conditional render, so with no photo the node is absent from the
+      DOM entirely, not CSS-`hidden`.** This is the structural fix for
+      UI-audit Finding 1 (the template's `[hidden]` attribute was
+      defeated by `.modal label { display:flex }`); R3's browser test
+      asserts it via DOM node count (`input[name="remove_photo"]` count
+      0 on create and when editing a photo-less staff, 1 when editing one
+      with a photo), not visual inspection. Backend: one change —
+      `config/urls.py` serves `/media/` **under `DEBUG` only** so photo
+      thumbnails display in dev (prod media serving deferred to R7 /
+      Step 10); DEBUG-gated so the test suite is unaffected (still 199).
+      Verified headless: 26/26 — create/inline-edit-persists-across-
+      reload/delete-empty/delete-with-items-409-message for Categories;
+      create-with-real-PNG-upload (thumbnail actually loads,
+      `naturalWidth > 0`) / remove-photo-clears-it / edit-persists /
+      archive-is-soft for Staff; no console errors; screenshots match
+      the design system.
 - [ ] **R4. Equipment + Stock movements.**
 - [ ] **R5. Requests + Trainings.** (May split R5a/R5b at build time if
       Trainings is too big for one chunk — flag before proceeding past
@@ -646,9 +674,14 @@ in as the authoritative design reference, backend gains SimpleJWT
 infra (`frontend/src/{lib,components,pages}`, `App.jsx` router,
 `AuthContext` + `lib/api.js` refresh-on-401, the primitive component
 layer, role-filtered `Sidebar`, `ProtectedRoute`, `LoginPage`; 8 pages
-still placeholders; **no backend changes**). **Steps 1–9 done + R1–R2
-done**; Step 10 (deploy — single-origin Django/whitenoise) and R3
-(React Categories + Staff pages) are the open fronts. Migrations:
+still placeholders; **no backend changes**) → R3 React Categories +
+Staff pages (real content replacing the placeholders; "Remove current
+photo" is now a conditional render so the DOM node is absent when there
+is no photo — closes UI-audit Finding 1 structurally; backend gains a
+**DEBUG-only** `/media/` route in `config/urls.py` for dev photo
+thumbnails). **Steps 1–9 done + R1–R3 done**; Step 10 (deploy —
+single-origin Django/whitenoise) and R4 (React Equipment + Stock
+movements pages) are the open fronts. Migrations:
 `core/0001`–`core/0005` (unchanged since Step 6c). Test suite: 199
 passing (Django; the React frontend has no test suite yet). Remote
 `origin` is `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main`
