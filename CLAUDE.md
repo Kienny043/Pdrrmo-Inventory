@@ -459,6 +459,24 @@ Work through these in order, confirming before moving to the next step.
       load; add pages load for editable models; the quantity
       readonly-on-change-only rule; the User page renders the profile
       inline.
+      > **Post-deploy fix (`UserAdmin.get_inline_instances`):** the
+      > `UserProfileInline` was rendering on `/admin/auth/user/add/` too
+      > (Django ≥ 5 no longer hides inlines on the add page). Creating a
+      > user *and* setting the role on that one screen 500'd — the
+      > `post_save` signal (`signals.create_user_profile`) inserts the
+      > `UserProfile` in `save_model()`, then the inline formset tries its
+      > own INSERT for the same `user_id` in `save_related()` →
+      > `IntegrityError` on the `OneToOneField`. Fix: `get_inline_instances`
+      > returns `[]` when `obj is None`, matching Django's own historical
+      > `UserAdmin`. **Create-user-with-role flow is now: add the user
+      > (username + password) → Save → set the role on the "core profile"
+      > inline of the change page → Save** — enforced by the UI, not just
+      > documented. Step 8's tests only GET-checked the pages; they never
+      > POSTed the add form with the inline populated, which is why it
+      > shipped. Four regression tests added (`Step8AdminTests`): add page
+      > hides the inline; add POST with inline data no longer 500s; plain
+      > add still yields a STAFF profile via the signal; role edit on the
+      > change page still works.
 - [x] **9. End-to-end testing** — four real-world workflows exercised as
       one continuous headless-Chromium session each, through the actual
       UI, against one evolving dev DB (dedicated fixture accounts:
@@ -1232,10 +1250,11 @@ model (D2), archived-record `retrieve` gated to admins with the
 register/cancel/attendance carve-out preserved (S1), path-neutral
 matrix-bridge wording (S2). The three-wave audit response is complete.
 Migrations: `core/0001`–`core/0007` (`0006` = `PersonnelAttendee`;
-`0007` = active-registration unique constraint). Test suite: **223
-passing** (192 + 11 audit Wave 1 + 14 audit Wave 2 + 6 audit Wave 3; the
-React frontend has no test suite — it's covered by the R1–R7 + Post-R7 +
-audit-wave headless-Chromium runs). Remote `origin` is
+`0007` = active-registration unique constraint). Test suite: **227
+passing** (192 + 11 audit Wave 1 + 14 audit Wave 2 + 6 audit Wave 3 + 4
+for the post-deploy `UserAdmin` add-page inline fix; the React frontend
+has no test suite — it's covered by the R1–R7 + Post-R7 + audit-wave
+headless-Chromium runs). Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 

@@ -1767,6 +1767,102 @@ class Step8AdminTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "can_permanently_delete")
 
+    # --- add-user flow: the UserProfile inline must NOT appear on the add
+    # page, or its formset collides with the signal-created profile on save
+    # (OneToOne -> IntegrityError -> 500). Step 8's tests only GET-checked the
+    # pages; they never POSTed the add form with the inline populated. ---
+
+    def test_add_user_page_hides_the_profile_inline(self):
+        r = self.c.get("/admin/auth/user/add/")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, "profile-TOTAL_FORMS")
+
+    def test_add_user_post_with_inline_role_data_does_not_500(self):
+        before = UserProfile.objects.count()
+        r = self.c.post(
+            "/admin/auth/user/add/",
+            {
+                "username": "clientadmin",
+                "password1": "Zx!199-aabb-Q",
+                "password2": "Zx!199-aabb-Q",
+                # a browser that somehow submitted inline data must not crash
+                "profile-TOTAL_FORMS": "1",
+                "profile-INITIAL_FORMS": "0",
+                "profile-MIN_NUM_FORMS": "0",
+                "profile-MAX_NUM_FORMS": "1",
+                "profile-0-id": "",
+                "profile-0-role": "ADMIN",
+                "profile-0-can_permanently_delete": "on",
+                "_save": "Save",
+            },
+        )
+        self.assertEqual(r.status_code, 302)  # not 500
+        u = User.objects.get(username="clientadmin")
+        self.assertEqual(UserProfile.objects.filter(user=u).count(), 1)
+        self.assertEqual(UserProfile.objects.count(), before + 1)
+
+    def test_plain_add_user_gets_a_staff_profile_from_the_signal(self):
+        r = self.c.post(
+            "/admin/auth/user/add/",
+            {
+                "username": "plainstaff",
+                "password1": "Zx!199-aabb-Q",
+                "password2": "Zx!199-aabb-Q",
+                "_save": "Save",
+            },
+        )
+        self.assertEqual(r.status_code, 302)
+        u = User.objects.get(username="plainstaff")
+        prof = UserProfile.objects.get(user=u)  # exactly one
+        self.assertEqual(prof.role, Role.STAFF)
+        self.assertFalse(prof.can_permanently_delete)
+
+    def test_role_is_settable_on_the_user_change_page(self):
+        self.c.post(
+            "/admin/auth/user/add/",
+            {
+                "username": "twostep",
+                "password1": "Zx!199-aabb-Q",
+                "password2": "Zx!199-aabb-Q",
+                "_save": "Save",
+            },
+        )
+        u = User.objects.get(username="twostep")
+        prof = UserProfile.objects.get(user=u)
+        self.assertEqual(prof.role, Role.STAFF)
+
+        change = self.c.get(f"/admin/auth/user/{u.pk}/change/")
+        self.assertContains(change, "profile-TOTAL_FORMS")  # inline present now
+
+        dj = u.date_joined
+        r = self.c.post(
+            f"/admin/auth/user/{u.pk}/change/",
+            {
+                "username": "twostep",
+                "last_login_0": "",
+                "last_login_1": "",
+                "date_joined_0": dj.strftime("%Y-%m-%d"),
+                "date_joined_1": dj.strftime("%H:%M:%S"),
+                "initial-date_joined_0": dj.strftime("%Y-%m-%d"),
+                "initial-date_joined_1": dj.strftime("%H:%M:%S"),
+                "is_active": "on",
+                "profile-TOTAL_FORMS": "1",
+                "profile-INITIAL_FORMS": "1",
+                "profile-MIN_NUM_FORMS": "0",
+                "profile-MAX_NUM_FORMS": "1",
+                "profile-0-id": str(prof.pk),
+                "profile-0-user": str(u.pk),
+                "profile-0-role": "ADMIN",
+                "profile-0-can_permanently_delete": "on",
+                "_save": "Save",
+            },
+        )
+        self.assertEqual(r.status_code, 302)
+        prof.refresh_from_db()
+        self.assertEqual(prof.role, Role.ADMIN)
+        self.assertTrue(prof.can_permanently_delete)
+        self.assertEqual(UserProfile.objects.filter(user=u).count(), 1)
+
 
 # --------------------------------------------------------------------------
 # R1 — SPA auth endpoints: JWT token pair/refresh + /api/me/

@@ -309,6 +309,18 @@ class UserAdmin(DjangoUserAdmin):
     inlines = [UserProfileInline]
     list_display = DjangoUserAdmin.list_display + ("core_role",)
 
+    def get_inline_instances(self, request, obj=None):
+        # The UserProfile is auto-created by the post_save signal
+        # (signals.create_user_profile). On the *add* page there is no User
+        # yet, so the inline formset would try to INSERT its own profile row
+        # in save_related() and collide with the signal-created one
+        # (OneToOneField -> IntegrityError -> 500). Only expose the inline
+        # once the User exists, so the formset edits that row instead. This
+        # matches Django's own historical UserAdmin behaviour.
+        if obj is None:
+            return []
+        return super().get_inline_instances(request, obj)
+
     @admin.display(description="Core role")
     def core_role(self, obj):
         profile = getattr(obj, "profile", None)
