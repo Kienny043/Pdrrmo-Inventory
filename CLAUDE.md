@@ -522,6 +522,10 @@ Work through these in order, confirming before moving to the next step.
     `ALLOWED_HOSTS` + `CSRF_TRUSTED_ORIGINS` so the `*.onrender.com`
     host needn't be hardcoded). No `SECURE_SSL_REDIRECT` — Render's edge
     already forces HTTPS and it risks a health-check redirect loop.
+    Also `WHITENOISE_IMMUTABLE_FILE_TEST` → `url.startswith("/assets/")`
+    so Vite's `name-HASH.ext` bundles get `Cache-Control: immutable`
+    (whitenoise's default heuristic only recognises a dotted
+    lowercase-hex hash; `index.html` at `/` stays revalidated).
   - **Why Docker, not a native Render Python service:** Render's Python
     runtime ships Node 18 and can't pin it (`NODE_VERSION` is
     Node-runtime-only); Vite 8 needs Node ≥ 20.19.

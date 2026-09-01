@@ -167,6 +167,17 @@ if DEBUG:
 WHITENOISE_ROOT = str(FRONTEND_DIST)
 WHITENOISE_INDEX_FILE = True
 
+
+def _immutable_spa_asset(path, url):
+    """Everything Vite emits under /assets/ is content-hashed, so it is safe
+    to cache forever. Whitenoise's default heuristic only recognises a dotted
+    lowercase-hex hash and misses Vite's ``name-HASH.ext`` form; index.html
+    lives at ``/`` and is never matched here (so it stays revalidated)."""
+    return url.startswith("/assets/")
+
+
+WHITENOISE_IMMUTABLE_FILE_TEST = _immutable_spa_asset
+
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
