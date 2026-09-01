@@ -168,15 +168,22 @@ WHITENOISE_ROOT = str(FRONTEND_DIST)
 WHITENOISE_INDEX_FILE = True
 
 
-def _immutable_spa_asset(path, url):
-    """Everything Vite emits under /assets/ is content-hashed, so it is safe
-    to cache forever. Whitenoise's default heuristic only recognises a dotted
-    lowercase-hex hash and misses Vite's ``name-HASH.ext`` form; index.html
-    lives at ``/`` and is never matched here (so it stays revalidated)."""
-    return url.startswith("/assets/")
+import re as _re
+
+# Setting WHITENOISE_IMMUTABLE_FILE_TEST *replaces* whitenoise's built-in test
+# (which only covers the /static/ manifest case), so this has to cover both:
+#   - Vite content-hashes everything under /assets/ (`name-HASH.ext`)
+#   - collectstatic hashes /static/ files as `name.<hexhash>.ext`
+# Both are safe to cache forever. index.html lives at / and matches neither,
+# so it stays revalidated (redeploys are picked up).
+_DJANGO_HASHED_STATIC = _re.compile(r"^/static/.+\.[0-9a-f]{8,}\.[^./]+$")
 
 
-WHITENOISE_IMMUTABLE_FILE_TEST = _immutable_spa_asset
+def _immutable_asset(path, url):
+    return url.startswith("/assets/") or bool(_DJANGO_HASHED_STATIC.match(url))
+
+
+WHITENOISE_IMMUTABLE_FILE_TEST = _immutable_asset
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
