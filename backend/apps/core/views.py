@@ -7,11 +7,12 @@ API views for the core app (spec Section 1 / 4).
   ``can_permanently_delete``).
 """
 
+from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
-from rest_framework.decorators import action, api_view
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -86,6 +87,32 @@ def training_catalog_list(request):
 
 
 @api_view(["GET"])
+@permission_classes([IsAdmin])
+def users_list(request):
+    """GET /api/users/ — ADMIN-only. Every login account plus the Personnel
+    record it is linked to (if any), for the matrix account-link control
+    (spec Section 5 / audit F1). Optional ``?search=`` on username.
+    """
+    User = get_user_model()
+    qs = User.objects.all().select_related("personnel_profile").order_by("username")
+    search = (request.query_params.get("search") or "").strip()
+    if search:
+        qs = qs.filter(username__icontains=search)
+    data = []
+    for u in qs:
+        linked = getattr(u, "personnel_profile", None)
+        data.append(
+            {
+                "id": u.id,
+                "username": u.username,
+                "personnel_id": linked.id if linked else None,
+                "personnel_name": linked.name if linked else None,
+            }
+        )
+    return Response(data)
+
+
+@api_view(["GET"])
 def me(request):
     """GET /api/me/ — the current user's identity + role flags for the SPA.
 
@@ -125,7 +152,11 @@ class PersonnelViewSet(viewsets.ModelViewSet):
         return [IsAdmin()]
 
     def get_queryset(self):
-        qs = Personnel.objects.all().prefetch_related("training_records")
+        qs = (
+            Personnel.objects.all()
+            .select_related("user", "archived_by")
+            .prefetch_related("training_records")
+        )
         if self.action != "list":
             # detail routes and custom actions must see archived rows too.
             return qs
@@ -577,6 +608,33 @@ class InventoryRequestViewSet(
         except InsufficientStock as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(req).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["delete"])
+    def withdraw(self, request, pk=None):
+        """DELETE /api/requests/<pk>/withdraw/ — the requester retracts their
+        own still-pending request (audit F5). Owner-only, PENDING-only.
+
+        Mirrors training's self-service cancel-registration. A pending request
+        never touched stock, so this is a hard delete (no WITHDRAWN status).
+        """
+        req = self.get_object()  # get_queryset already scopes STAFF to their own
+        if req.requested_by_id != request.user.id:
+            return Response(
+                {"detail": "You can only withdraw your own request."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if req.status != InventoryRequest.Status.PENDING:
+            return Response(
+                {
+                    "detail": (
+                        f"Request is already {req.status}; "
+                        "only a pending request can be withdrawn."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        req.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # ==========================================================================

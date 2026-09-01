@@ -12,6 +12,7 @@ import Modal from '../components/Modal'
 import ErrorBanner from '../components/ErrorBanner'
 import { LoadingSection } from '../components/Spinner'
 import EmptyState from '../components/EmptyState'
+import ItemHistoryModal from '../components/ItemHistoryModal'
 
 const CONDITIONS = [
   ['NEW', 'New'],
@@ -166,55 +167,6 @@ function ItemForm({ item, categories, staff, onSaved, onCancel }) {
         </Button>
       </div>
     </form>
-  )
-}
-
-function HistoryModal({ item, open, onClose }) {
-  const [logs, setLogs] = useState(null)
-  const [error, setError] = useState('')
-  useEffect(() => {
-    if (!open || !item) return
-    setLogs(null)
-    setError('')
-    apiGet(`/api/items/${item.id}/holder-history/`).then(setLogs).catch((e) => setError(e.message))
-  }, [open, item])
-  return (
-    <Modal open={open} onClose={onClose} title={item ? `Holder history — ${item.name}` : ''} size="xl">
-      {error && <ErrorBanner>{error}</ErrorBanner>}
-      {!logs ? (
-        <LoadingSection />
-      ) : logs.length === 0 ? (
-        <EmptyState>No holder history.</EmptyState>
-      ) : (
-        <Table>
-          <THead>
-            <Th>When</Th>
-            <Th>Action</Th>
-            <Th>Staff</Th>
-            <Th>By</Th>
-            <Th>Note</Th>
-          </THead>
-          <tbody>
-            {logs.map((h) => (
-              <Tr key={h.id}>
-                <Td variant="muted">{String(h.timestamp).slice(0, 10)}</Td>
-                <Td variant="plain">
-                  <Badge value={h.action} />
-                </Td>
-                <Td>{h.staff_name || '—'}</Td>
-                <Td variant="muted">{h.performed_by || '—'}</Td>
-                <Td variant="muted">{h.note || '—'}</Td>
-              </Tr>
-            ))}
-          </tbody>
-        </Table>
-      )}
-      <div className="flex justify-end mt-4">
-        <Button variant="secondary" onClick={onClose}>
-          Close
-        </Button>
-      </div>
-    </Modal>
   )
 }
 
@@ -421,7 +373,7 @@ export default function EquipmentPage() {
       )}
 
       {canEdit && (
-        <HistoryModal item={historyItem} open={!!historyItem} onClose={() => setHistoryItem(null)} />
+        <ItemHistoryModal item={historyItem} open={!!historyItem} onClose={() => setHistoryItem(null)} />
       )}
     </>
   )

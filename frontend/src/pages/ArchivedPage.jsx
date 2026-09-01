@@ -8,6 +8,8 @@ import TextAction from '../components/TextAction'
 import ErrorBanner from '../components/ErrorBanner'
 import { LoadingSection } from '../components/Spinner'
 import EmptyState from '../components/EmptyState'
+import ItemHistoryModal from '../components/ItemHistoryModal'
+import TrainingHistoryModal from '../components/TrainingHistoryModal'
 
 const fdate = (v) => (v ? String(v).slice(0, 10) : '—')
 
@@ -19,6 +21,7 @@ const TABS = [
     label: 'Items',
     url: '/api/items/archived/',
     base: '/api/items/',
+    history: 'item',
     cols: [
       { h: 'Name', f: 'name' },
       { h: 'Brand', f: 'brand' },
@@ -46,6 +49,7 @@ const TABS = [
     label: 'Trainings',
     url: '/api/trainings/archived/',
     base: '/api/trainings/',
+    history: 'training',
     cols: [
       { h: 'Title', f: 'title' },
       { h: 'Start', f: 'date_start' },
@@ -84,6 +88,7 @@ export default function ArchivedPage() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [historyRow, setHistoryRow] = useState(null) // row whose History modal is open
 
   const tab = TABS.find((t) => t.key === activeKey)
 
@@ -132,7 +137,10 @@ export default function ArchivedPage() {
       <Tabs
         tabs={TABS.map((t) => ({ key: t.key, label: t.label }))}
         active={activeKey}
-        onChange={setActiveKey}
+        onChange={(k) => {
+          setActiveKey(k)
+          setHistoryRow(null)
+        }}
       />
       <PageBody>
         {error && (
@@ -163,6 +171,11 @@ export default function ArchivedPage() {
                   ))}
                   <Td variant="plain">
                     <div className="flex gap-3">
+                      {tab.history && (
+                        <TextAction tone="navy" onClick={() => setHistoryRow(r)}>
+                          History
+                        </TextAction>
+                      )}
                       <TextAction tone="green" onClick={() => restore(r)}>
                         Restore
                       </TextAction>
@@ -183,6 +196,17 @@ export default function ArchivedPage() {
           </Table>
         )}
       </PageBody>
+
+      <ItemHistoryModal
+        item={tab.history === 'item' ? historyRow : null}
+        open={tab.history === 'item' && !!historyRow}
+        onClose={() => setHistoryRow(null)}
+      />
+      <TrainingHistoryModal
+        training={tab.history === 'training' ? historyRow : null}
+        open={tab.history === 'training' && !!historyRow}
+        onClose={() => setHistoryRow(null)}
+      />
     </>
   )
 }

@@ -2338,3 +2338,165 @@ class Wave1RosterAddRaceTests(TransactionTestCase):
         self.assertIn(201, results.values(), results)
         self.assertIn(409, results.values(), results)
         self.assertNotIn(500, results.values(), results)
+
+
+# ==========================================================================
+# Wave 2 — functional additions
+#   F1  Personnel.user visibility + link/unlink control (+ GET /api/users/)
+#   F5  self-service withdraw of a STAFF user's own PENDING request
+#   F7  History access on the Archived page — frontend-only, browser-verified
+# ==========================================================================
+
+
+class Wave2UsersEndpointTests(TestCase):
+    """F1: GET /api/users/ — ADMIN-only, lists accounts + their linked
+    Personnel, optional ?search= on username."""
+
+    def setUp(self):
+        self.admin = make_user("admin_u", role=Role.ADMIN)
+        self.staff = make_user("staff_u", role=Role.STAFF)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+
+    def test_admin_gets_accounts_with_link_state(self):
+        p = Personnel.objects.create(
+            name="Linked Person", municipality="Lucban", user=self.staff
+        )
+        rows = {r["username"]: r for r in self.c.get("/api/users/").json()}
+        self.assertEqual(rows["staff_u"]["personnel_id"], p.pk)
+        self.assertEqual(rows["staff_u"]["personnel_name"], "Linked Person")
+        self.assertIsNone(rows["admin_u"]["personnel_id"])
+        self.assertIsNone(rows["admin_u"]["personnel_name"])
+
+    def test_search_filters_by_username(self):
+        r = self.c.get("/api/users/?search=STAFF")
+        self.assertEqual([u["username"] for u in r.json()], ["staff_u"])
+
+    def test_staff_forbidden(self):
+        sc = APIClient()
+        sc.force_authenticate(user=self.staff)
+        self.assertEqual(sc.get("/api/users/").status_code, 403)
+
+    def test_unauthenticated_401(self):
+        self.assertEqual(APIClient().get("/api/users/").status_code, 401)
+
+
+class Wave2PersonnelAccountLinkTests(TestCase):
+    """F1: link / unlink an account via PATCH /api/personnel/<id>/ {user}."""
+
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.staff = make_user("s", role=Role.STAFF)
+        self.other = make_user("s2", role=Role.STAFF)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        self.p = Personnel.objects.create(name="Jane Roe", municipality="Lucban")
+
+    def test_link_then_unlink(self):
+        r = self.c.patch(
+            f"/api/personnel/{self.p.pk}/", {"user": self.staff.pk}, format="json"
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["user"], self.staff.pk)
+        self.assertEqual(r.json()["user_username"], "s")
+        self.p.refresh_from_db()
+        self.assertEqual(self.p.user, self.staff)
+
+        r2 = self.c.patch(
+            f"/api/personnel/{self.p.pk}/", {"user": None}, format="json"
+        )
+        self.assertEqual(r2.status_code, 200)
+        self.assertIsNone(r2.json()["user"])
+        self.assertIsNone(r2.json()["user_username"])
+        self.p.refresh_from_db()
+        self.assertIsNone(self.p.user)
+
+    def test_linking_a_user_already_linked_elsewhere_is_400(self):
+        Personnel.objects.create(
+            name="Existing", municipality="Mauban", user=self.staff
+        )
+        r = self.c.patch(
+            f"/api/personnel/{self.p.pk}/", {"user": self.staff.pk}, format="json"
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("already linked to Existing", str(r.json()))
+        self.p.refresh_from_db()
+        self.assertIsNone(self.p.user)
+
+    def test_relinking_same_user_to_same_record_is_ok(self):
+        self.p.user = self.staff
+        self.p.save(update_fields=["user"])
+        r = self.c.patch(
+            f"/api/personnel/{self.p.pk}/", {"user": self.staff.pk}, format="json"
+        )
+        self.assertEqual(r.status_code, 200)
+
+    def test_cannot_link_on_archived_personnel(self):
+        self.p.is_archived = True
+        self.p.save(update_fields=["is_archived"])
+        r = self.c.patch(
+            f"/api/personnel/{self.p.pk}/", {"user": self.staff.pk}, format="json"
+        )
+        self.assertEqual(r.status_code, 409)
+
+    def test_staff_cannot_link(self):
+        sc = APIClient()
+        sc.force_authenticate(user=self.staff)
+        r = sc.patch(
+            f"/api/personnel/{self.p.pk}/", {"user": self.staff.pk}, format="json"
+        )
+        self.assertEqual(r.status_code, 403)
+
+
+class Wave2RequestWithdrawTests(TestCase):
+    """F5: DELETE /api/requests/<id>/withdraw/ — owner-only, PENDING-only."""
+
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.s1 = make_user("s1", role=Role.STAFF)
+        self.s2 = make_user("s2", role=Role.STAFF)
+        self.cat = Category.objects.create(name="C")
+        self.item = InventoryItem.objects.create(
+            category=self.cat, name="Handset", quantity=10
+        )
+
+    def cli(self, user):
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def _pending(self, who):
+        return InventoryRequest.objects.create(
+            requested_by=who, item=self.item, quantity=2
+        )
+
+    def test_owner_withdraws_own_pending(self):
+        req = self._pending(self.s1)
+        r = self.cli(self.s1).delete(f"/api/requests/{req.pk}/withdraw/")
+        self.assertEqual(r.status_code, 204)
+        self.assertFalse(InventoryRequest.objects.filter(pk=req.pk).exists())
+
+    def test_other_staff_gets_404_not_someone_elses_request(self):
+        req = self._pending(self.s1)
+        r = self.cli(self.s2).delete(f"/api/requests/{req.pk}/withdraw/")
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(InventoryRequest.objects.filter(pk=req.pk).exists())
+
+    def test_cannot_withdraw_a_decided_request(self):
+        req = self._pending(self.s1)
+        req.status = InventoryRequest.Status.APPROVED
+        req.save(update_fields=["status"])
+        r = self.cli(self.s1).delete(f"/api/requests/{req.pk}/withdraw/")
+        self.assertEqual(r.status_code, 409)
+        self.assertTrue(InventoryRequest.objects.filter(pk=req.pk).exists())
+
+    def test_admin_cannot_withdraw_another_users_request(self):
+        req = self._pending(self.s1)
+        r = self.cli(self.admin).delete(f"/api/requests/{req.pk}/withdraw/")
+        self.assertEqual(r.status_code, 403)
+        self.assertTrue(InventoryRequest.objects.filter(pk=req.pk).exists())
+
+    def test_unauthenticated_401(self):
+        req = self._pending(self.s1)
+        r = APIClient().delete(f"/api/requests/{req.pk}/withdraw/")
+        self.assertEqual(r.status_code, 401)

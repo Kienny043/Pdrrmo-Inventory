@@ -1,5 +1,6 @@
 """Serializers for the core CRUD surface (spec Section 4)."""
 
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from . import reference
@@ -35,6 +36,16 @@ class PersonnelSerializer(serializers.ModelSerializer):
     # Read-only; archive transitions happen only through DELETE / restore.
     archived_by = serializers.SlugRelatedField(slug_field="username", read_only=True)
     training_records = TrainingRecordCellSerializer(many=True, read_only=True)
+    # Optional login-account link (audit F1). Writable by id (ADMIN, via the
+    # matrix "Account" column / PATCH); ``null`` clears it. Declared explicitly
+    # so DRF does not attach a UniqueValidator with a generic message —
+    # ``validate_user`` below gives a record-named one instead.
+    user = serializers.PrimaryKeyRelatedField(
+        queryset=get_user_model().objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    user_username = serializers.SerializerMethodField()
 
     class Meta:
         model = Personnel
@@ -47,6 +58,8 @@ class PersonnelSerializer(serializers.ModelSerializer):
             "municipality",
             "district",
             "other_drr_training",
+            "user",
+            "user_username",
             "is_archived",
             "archived_at",
             "archived_by",
@@ -54,9 +67,25 @@ class PersonnelSerializer(serializers.ModelSerializer):
             "updated_at",
             "training_records",
         ]
-        # district / archived_by / training_records are already declared
-        # read-only above; these are the remaining model-derived ones.
+        # district / archived_by / training_records / user_username are already
+        # declared read-only above; these are the remaining model-derived ones.
         read_only_fields = ["is_archived", "archived_at", "created_at", "updated_at"]
+
+    def get_user_username(self, obj):
+        return obj.user.username if obj.user else None
+
+    def validate_user(self, value):
+        if value is None:
+            return value
+        clash = Personnel.objects.filter(user=value)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        other = clash.first()
+        if other is not None:
+            raise serializers.ValidationError(
+                f"{value.username} is already linked to {other.name}."
+            )
+        return value
 
 
 class TrainingRecordCellWriteSerializer(serializers.Serializer):

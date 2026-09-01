@@ -33,6 +33,7 @@ urlpatterns = [
     path("token/", TokenObtainPairView.as_view(), name="token-obtain-pair"),
     path("token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
     path("me/", views.me, name="me"),
+    path("users/", views.users_list, name="users-list"),
     # --- reference data ---
     path("municipalities/", views.municipalities_list, name="municipalities-list"),
     path("training-catalog/", views.training_catalog_list, name="training-catalog-list"),

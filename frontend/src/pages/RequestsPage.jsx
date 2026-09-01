@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { apiGet, apiPost, apiPatch } from '../lib/api'
+import { apiGet, apiPost, apiPatch, apiDelete } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import PageHeader, { PageBody } from '../components/PageHeader'
 import { Table, THead, Th, Tr, Td } from '../components/Table'
@@ -20,6 +20,7 @@ function decidedText(r) {
 export default function RequestsPage() {
   const { user } = useAuth()
   const isAdmin = !!user?.is_admin
+  const me = user?.username
 
   const [requests, setRequests] = useState([])
   const [items, setItems] = useState([])
@@ -78,6 +79,16 @@ export default function RequestsPage() {
     } catch (err) {
       // insufficient stock (400) / already-decided (409): show it on the row,
       // leave the request as it was.
+      setRowError((m) => ({ ...m, [req.id]: err.message }))
+    }
+  }
+
+  const withdraw = async (req) => {
+    setRowError((m) => ({ ...m, [req.id]: '' }))
+    try {
+      await apiDelete(`/api/requests/${req.id}/withdraw/`)
+      await load()
+    } catch (err) {
       setRowError((m) => ({ ...m, [req.id]: err.message }))
     }
   }
@@ -142,7 +153,7 @@ export default function RequestsPage() {
               <Th>Note</Th>
               <Th>Requester</Th>
               <Th>Decided by</Th>
-              {isAdmin && <Th className="w-52" />}
+              <Th className="w-52" />
             </THead>
             <tbody>
               {requests.map((r) => (
@@ -155,29 +166,41 @@ export default function RequestsPage() {
                   <Td variant="muted">{r.note || '—'}</Td>
                   <Td variant="muted">{r.requested_by}</Td>
                   <Td variant="muted">{decidedText(r)}</Td>
-                  {isAdmin && (
-                    <Td variant="plain">
-                      {r.status === 'PENDING' ? (
-                        <div>
-                          <div className="flex gap-3">
-                            <TextAction tone="green" onClick={() => decide(r, 'APPROVED')}>
-                              Approve
-                            </TextAction>
+                  <Td variant="plain">
+                    {/* decided rows render no controls at all */}
+                    {r.status === 'PENDING' && (
+                      <div>
+                        <div className="flex gap-3">
+                          {isAdmin && (
+                            <>
+                              <TextAction tone="green" onClick={() => decide(r, 'APPROVED')}>
+                                Approve
+                              </TextAction>
+                              <TextAction
+                                tone="red"
+                                confirm={`Reject this request for ${r.quantity}× ${r.item_name}?`}
+                                onClick={() => decide(r, 'REJECTED')}
+                              >
+                                Reject
+                              </TextAction>
+                            </>
+                          )}
+                          {r.requested_by === me && (
                             <TextAction
                               tone="red"
-                              confirm={`Reject this request for ${r.quantity}× ${r.item_name}?`}
-                              onClick={() => decide(r, 'REJECTED')}
+                              confirm={`Withdraw your request for ${r.quantity}× ${r.item_name}?`}
+                              onClick={() => withdraw(r)}
                             >
-                              Reject
+                              Withdraw
                             </TextAction>
-                          </div>
-                          {rowError[r.id] && (
-                            <p className="text-xs text-pd-red mt-1">{rowError[r.id]}</p>
                           )}
                         </div>
-                      ) : null /* decided rows render no controls at all */}
-                    </Td>
-                  )}
+                        {rowError[r.id] && (
+                          <p className="text-xs text-pd-red mt-1">{rowError[r.id]}</p>
+                        )}
+                      </div>
+                    )}
+                  </Td>
                 </Tr>
               ))}
             </tbody>

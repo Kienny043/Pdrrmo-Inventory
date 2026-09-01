@@ -112,6 +112,7 @@ export default function PersonnelPage() {
   const [municipality, setMunicipality] = useState('')
   const [view, setView] = useState('active')
   const [rows, setRows] = useState([])
+  const [users, setUsers] = useState([]) // { id, username, personnel_id, personnel_name }
   const [refLoaded, setRefLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState({ text: '', kind: '' })
@@ -124,14 +125,23 @@ export default function PersonnelPage() {
   // returns (First District) so the matrix shows data on open instead of an
   // empty "pick a district" state.
   useEffect(() => {
-    Promise.all([apiGet('/api/training-catalog/'), apiGet('/api/municipalities/')])
-      .then(([cat, muni]) => {
+    Promise.all([
+      apiGet('/api/training-catalog/'),
+      apiGet('/api/municipalities/'),
+      apiGet('/api/users/'),
+    ])
+      .then(([cat, muni, us]) => {
         setCatalog(cat)
         setMunicipalities(muni)
+        setUsers(us || [])
         setDistrict((cur) => cur || muni[0]?.district || '')
         setRefLoaded(true)
       })
       .catch((e) => setStatus({ text: `Failed to load reference data: ${e.message}`, kind: 'err' }))
+  }, [])
+
+  const refetchUsers = useCallback(() => {
+    apiGet('/api/users/').then((us) => setUsers(us || [])).catch(() => {})
   }, [])
 
   const districts = useMemo(() => {
@@ -187,6 +197,7 @@ export default function PersonnelPage() {
       control?.classList.remove('matrix-cell-saving')
       flash(control, 'ok')
       setStatus({ text: 'Saved', kind: 'ok' })
+      if (field === 'user') refetchUsers() // link state changed -> refresh options
     } catch (e) {
       control?.classList.remove('matrix-cell-saving')
       flash(control, 'err')
@@ -250,8 +261,14 @@ export default function PersonnelPage() {
     }
   }
 
-  // non-Name identity columns: Designation, Employment Status, Org Affiliation [, Municipality]
-  const leadRest = 3 + (showMunicipality ? 1 : 0)
+  // non-Name identity columns: Designation, Employment Status, Org Affiliation,
+  // Account [, Municipality]
+  const leadRest = 4 + (showMunicipality ? 1 : 0)
+
+  // users available to link on a given row: the row's own current link (kept
+  // selectable) plus every account not yet linked to anyone.
+  const linkOptionsFor = (p) =>
+    users.filter((u) => u.personnel_id == null || u.id === p.user)
 
   return (
     <>
@@ -350,6 +367,7 @@ export default function PersonnelPage() {
                   <th>Designation</th>
                   <th>Employment Status</th>
                   <th>Org Affiliation</th>
+                  <th>Account</th>
                   {showMunicipality && <th>Municipality</th>}
                   {trainingCols.map((c) => (
                     <th key={c.key} className="train-h" title={c.label}>
@@ -368,6 +386,7 @@ export default function PersonnelPage() {
                     trainingCols={trainingCols}
                     showMunicipality={showMunicipality}
                     archived={archived}
+                    linkOptions={linkOptionsFor(p)}
                     onSaveIdentity={savePersonnel}
                     onSaveCell={saveCell}
                     onArchive={archivePerson}
@@ -408,7 +427,7 @@ export default function PersonnelPage() {
 // one personnel row (uncontrolled inline inputs, blur-to-save)
 // --------------------------------------------------------------------------
 
-function PersonRow({ p, trainingCols, showMunicipality, archived, onSaveIdentity, onSaveCell, onArchive, onRestore }) {
+function PersonRow({ p, trainingCols, showMunicipality, archived, linkOptions, onSaveIdentity, onSaveCell, onArchive, onRestore }) {
   const byKey = useRef({})
   byKey.current = {}
   p.training_records.forEach((r) => {
@@ -452,6 +471,30 @@ function PersonRow({ p, trainingCols, showMunicipality, archived, onSaveIdentity
         >
           <option value="EMPLOYEE">Employee</option>
           <option value="VOLUNTEER">Volunteer</option>
+        </select>
+      </td>
+      {/* Account link — read+write; the linked username shows as the current
+          value, "— none —" when unlinked. onChange PATCHes {user}.
+          Uncontrolled (like Org Affiliation) so a pick doesn't snap back
+          while the PATCH is in flight; the catch reverts on failure. */}
+      <td className="id-cell">
+        <select
+          defaultValue={p.user || ''}
+          onChange={(e) =>
+            onSaveIdentity(
+              p,
+              { user: e.target.value ? Number(e.target.value) : null },
+              e.target,
+              'user',
+            )
+          }
+        >
+          <option value="">— none —</option>
+          {(linkOptions || []).map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.username}
+            </option>
+          ))}
         </select>
       </td>
       {showMunicipality && <td>{p.municipality}</td>}

@@ -967,11 +967,43 @@ commit cycle.
   behaviour_neutral` untouched and green. F3 verified with a 10/10
   real-browser run (`DEBUG=False` single-origin).
 
-### Wave 2 — functional additions  ·  planned
+### Wave 2 — functional additions  ·  **DONE**  (no migration, suite **217**)
 
-`Personnel.user` account-link visibility + link/unlink control on the
-matrix (F1); self-service withdraw of a STAFF user's own PENDING request
-(F5); History access on the Archived page's Items/Trainings tabs (F7).
+- **F1** — `Personnel.user` account link is now visible + manageable from
+  the SPA. New `GET /api/users/` (ADMIN-only, `{id, username,
+  personnel_id, personnel_name}`, optional `?search=`).
+  `PersonnelSerializer` gains a **writable** `user` (declared as an
+  explicit `PrimaryKeyRelatedField` so DRF attaches no generic
+  UniqueValidator) + read-only `user_username`; `validate_user` raises a
+  record-named 400 (`"<username> is already linked to <name>."`) when the
+  account is linked elsewhere. Link/unlink rides the existing `PATCH
+  /api/personnel/<id>/` (ADMIN-only; the archived-guard 409 applies).
+  Frontend: a new read+write **"Account"** `<select>` column in the
+  matrix grid (— none — / current link / every unlinked account),
+  change-to-save, refetches `/api/users/` after a link change so other
+  rows' option lists update. `leadRest` 3 → 4.
+- **F5** — `DELETE /api/requests/<id>/withdraw/` — `IsAuthenticated`,
+  **owner-only** (403 for a non-owner admin; 404 for another STAFF, via
+  the existing queryset scope, so IDs aren't disclosed), **PENDING-only**
+  (409 otherwise), hard delete → 204. Requests page shows a **"Withdraw"**
+  action on any PENDING row whose `requested_by` is the caller; the
+  actions column is now always rendered (was ADMIN-only). Mirrors
+  training's self-service `cancel-registration`.
+- **F7** — History is reachable from the Archived page without restoring.
+  `HistoryModal` extracted from `EquipmentPage.jsx` into shared
+  `components/ItemHistoryModal.jsx`; new
+  `components/TrainingHistoryModal.jsx` (read-only Registrations /
+  Personnel roster / Manual attendees, reusing the three existing GET
+  endpoints — all already work for archived trainings). `ArchivedPage`
+  gains `history: 'item'` / `history: 'training'` keys on the
+  Items/Trainings tab configs and a per-row **"History"** action. No
+  backend change.
+- **Tests (+14 → 217):** `Wave2UsersEndpointTests` (4),
+  `Wave2PersonnelAccountLinkTests` (6), `Wave2RequestWithdrawTests` (5).
+  F7 is frontend-only, verified in a 20/20 real-browser run
+  (`DEBUG=False` single-origin, re-run 2×): F1 link/unlink persistence +
+  option filtering + the 400 guard reaching the client; F5 owner-sees-
+  Withdraw / admin-doesn't / withdrawn-row-gone; F7 both History modals.
 
 ### Wave 3 — UX polish  ·  planned
 
@@ -1069,15 +1101,21 @@ serving mechanism is already wired) is the last build-order item. Step
 11 (fold this project's React frontend into `PDRRMO_v3`'s actual app +
 its role/JWT system) remains a later, separate effort — **unchanged in
 scope**; the SPA now being production here doesn't advance it. Then a
-**logic / data-consistency audit** (see the section above) — **Wave 1**
+**logic / data-consistency audit** (see the section above). **Wave 1**
 landed: `core/0007` (partial unique index on active
 `TrainingRegistration`s), `_matrix_bridge` archived guard, register /
 roster-add race fixes, `Personnel.district` KeyError guard, Equipment
-Remarks/Description field split. Migrations: `core/0001`–`core/0007`
-(`0006` = `PersonnelAttendee`; `0007` = active-registration unique
-constraint). Test suite: **203 passing** (192 + 11 for audit Wave 1; the
-React frontend has no test suite — it's covered by the R1–R7 + Post-R7 +
-audit-wave headless-Chromium runs). Remote `origin` is
+Remarks/Description field split. **Wave 2** landed (no migration): `GET
+/api/users/` + writable `Personnel.user` link with a record-named
+conflict error + an "Account" column in the matrix (F1); self-service
+`DELETE /api/requests/<id>/withdraw/` + Withdraw button (F5); History
+access from the Archived page for Items and Trainings via a shared
+`ItemHistoryModal` and a new read-only `TrainingHistoryModal` (F7).
+Migrations: `core/0001`–`core/0007` (`0006` = `PersonnelAttendee`;
+`0007` = active-registration unique constraint). Test suite: **217
+passing** (192 + 11 audit Wave 1 + 14 audit Wave 2; the React frontend
+has no test suite — it's covered by the R1–R7 + Post-R7 + audit-wave
+headless-Chromium runs). Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 
