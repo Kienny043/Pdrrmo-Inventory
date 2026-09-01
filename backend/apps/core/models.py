@@ -131,8 +131,18 @@ class Personnel(models.Model):
 
     @property
     def district(self):
-        """Computed via the municipality->district lookup, never stored (spec 3.3)."""
-        return district_for(self.municipality)
+        """Computed via the municipality->district lookup, never stored (spec 3.3).
+
+        Returns ``None`` for an unrecognised municipality (e.g. a value written
+        through the admin/shell before a catalog change) rather than raising —
+        matches the defensive handling already used in
+        ``ManualAttendeeSerializer`` / ``PersonnelAttendeeSerializer`` so one
+        stale row can't 500 the whole personnel list.
+        """
+        try:
+            return district_for(self.municipality)
+        except KeyError:
+            return None
 
 
 class TrainingRecord(models.Model):
@@ -526,6 +536,17 @@ class TrainingRegistration(models.Model):
 
     class Meta:
         ordering = ["-registered_at"]
+        constraints = [
+            # At most one *active* (REGISTERED) row per (training, user) — the
+            # definitive backstop for the double-registration race, on any
+            # backend. Deliberately partial: a CANCELLED row plus a fresh
+            # REGISTERED one is still allowed (spec 2.6, cancel-then-reregister).
+            models.UniqueConstraint(
+                fields=["training", "user"],
+                condition=models.Q(status="REGISTERED"),
+                name="uniq_active_registration_per_user",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.user} @ {self.training} [{self.status}]"

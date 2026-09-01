@@ -917,6 +917,75 @@ RDANA cell flipped to 2026, Remove clears the roster entry but not the
 **Scope:** standalone-system only. Public/portal training registration
 and self-service flows remain Step 11 (fold into `PDRRMO_v3`).
 
+## Post-R7: logic / data-consistency audit response
+
+A deeper audit (beyond the earlier UI/button pass) of business-rule gaps,
+hidden inconsistencies, and un-surfaced data. Findings grouped by
+severity; being worked in three waves, each its own plan-build-verify-
+commit cycle.
+
+### Wave 1 — real bugs, fixed outright  ·  **DONE**  (migration `core/0007`, suite **203**)
+
+- **F3** — `EquipmentPage.jsx`'s modal "Remarks" field was bound to
+  `description`; the table column + CSV read `remarks`, so typed remarks
+  vanished and `remarks` was never settable. Split into two textareas:
+  a new **Description** (→ `description`) and **Remarks** (→ `remarks`,
+  now correct). No table column added for `description` (kept the
+  10-column table readable); both fields round-trip in the modal +
+  `/api/items/`. No backend change (serializer already exposed both).
+- **D1** — `_matrix_bridge` (`views.py`) now returns
+  `(False, "the training is archived")` / `(False, "the personnel
+  record is archived")` when either side is archived — added **once
+  inside the helper**, so both the User-linked `attendance` action and
+  the roster `set_attendance` inherit it. Mirrors the 409 the direct
+  cell-edit endpoint already returns. Precedence: no-matrix-key →
+  archived-training → no-personnel → archived-personnel → year-range.
+  The `attended:false` un-mark path never calls the bridge (unchanged;
+  still never deletes).
+- **D3** — double-registration race. `TrainingRegistration` gains a
+  **partial `UniqueConstraint`** on `(training, user)` `WHERE
+  status='REGISTERED'` (migration `core/0007`) — CANCELLED + a fresh
+  REGISTERED row still legal (spec 2.6). `register` wraps its
+  check+insert in `transaction.atomic()` + `select_for_update()` on the
+  training row and catches `IntegrityError` → same `409`.
+  `TrainingsPage.jsx` disables Register/Cancel while their request is in
+  flight (`rowBusy` state, "Registering…" / "Cancelling…").
+- **D4** — `Personnel.district` property now `try/except KeyError →
+  None`, matching `ManualAttendeeSerializer` /
+  `PersonnelAttendeeSerializer` / `PersonnelAdmin`. One stale
+  `municipality` value can no longer 500 the whole `GET /api/personnel/`.
+- **PersonnelAttendee create race** — `serializer.save()` wrapped in
+  `transaction.atomic()` + `IntegrityError` catch → same `409` the
+  sequential duplicate returns, instead of a raw 500.
+- **Tests (+11 → 203):** `Wave1MatrixBridgeArchivedTests` (7),
+  `Wave1DistrictGuardTests` (2), `Wave1RegistrationRaceTests` (2),
+  `Wave1RosterAddRaceTests` (1). The two race classes use real
+  **barrier-synchronised concurrent requests** (`TransactionTestCase` +
+  threads, like `Step6bConcurrencyTests`), re-run 3× standalone for
+  stability — not reasoned about in the abstract. Existing
+  `Step6cAttendanceBridgeTests` + `test_matrix_bridge_helper_is_
+  behaviour_neutral` untouched and green. F3 verified with a 10/10
+  real-browser run (`DEBUG=False` single-origin).
+
+### Wave 2 — functional additions  ·  planned
+
+`Personnel.user` account-link visibility + link/unlink control on the
+matrix (F1); self-service withdraw of a STAFF user's own PENDING request
+(F5); History access on the Archived page's Items/Trainings tabs (F7).
+
+### Wave 3 — UX polish  ·  planned
+
+Registrations empty-state parity (U1); "Archived by" column on the
+Archived page (U2); drop Staff's dead "State" column (U4);
+permanent-delete confirm text names what's lost (D2, confirm-text
+version only); admin-only archived-record detail retrieve (S1);
+path-neutral `_matrix_bridge` "no linked Personnel" wording (S2).
+
+**Deferred, out of scope for all three waves:** F2 full production
+`/media/` serving (Step 10), F4 (`my-registrations` UI), F6 (admin
+removing a registration), blocking permanent-delete on audit-trail
+presence (D2's alternative fix — doing the confirm-text version instead).
+
 ## Current Git State
 
 On branch `main`: `11c8a3c` scaffold → Step 2 reference-data → Step 3a/3b
@@ -999,11 +1068,16 @@ done.** Step 10 (deploy — Render + external Postgres; the single-origin
 serving mechanism is already wired) is the last build-order item. Step
 11 (fold this project's React frontend into `PDRRMO_v3`'s actual app +
 its role/JWT system) remains a later, separate effort — **unchanged in
-scope**; the SPA now being production here doesn't advance it. Migrations:
-`core/0001`–`core/0006` (`0006` = `PersonnelAttendee`, Post-R7). Test
-suite: **192 passing** (178 post-cutover + 14 for the Personnel-roster
-feature; the React frontend has no test suite — it's covered by the
-R1–R7 + Post-R7 headless-Chromium runs). Remote `origin` is
+scope**; the SPA now being production here doesn't advance it. Then a
+**logic / data-consistency audit** (see the section above) — **Wave 1**
+landed: `core/0007` (partial unique index on active
+`TrainingRegistration`s), `_matrix_bridge` archived guard, register /
+roster-add race fixes, `Personnel.district` KeyError guard, Equipment
+Remarks/Description field split. Migrations: `core/0001`–`core/0007`
+(`0006` = `PersonnelAttendee`; `0007` = active-registration unique
+constraint). Test suite: **203 passing** (192 + 11 for audit Wave 1; the
+React frontend has no test suite — it's covered by the R1–R7 + Post-R7 +
+audit-wave headless-Chromium runs). Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 

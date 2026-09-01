@@ -593,13 +593,20 @@ def _matrix_bridge(training, personnel):
     — ``reason`` is set only when ``updated`` is False. **Never deletes
     anything**: un-marking attendance simply never calls this.
 
-    Reason precedence matches the original inline logic: no matrix key, then no
-    Personnel, then year out of the matrix range.
+    Reason precedence: no matrix key, then archived training, then no
+    Personnel, then archived Personnel, then year out of the matrix range.
+    The two archived checks mirror the 409 that the direct cell-edit endpoint
+    (``training_record``) already returns — attendance must not be a side door
+    that mutates the matrix for records the cell editor refuses to touch.
     """
     if not training.matrix_training_key:
         return False, "the training has no matrix_training_key"
+    if training.is_archived:
+        return False, "the training is archived"
     if personnel is None:
         return False, "the attending user has no linked Personnel record"
+    if personnel.is_archived:
+        return False, "the personnel record is archived"
     year = training.date_start.year
     if not TRAINING_YEAR_MIN <= year <= TRAINING_YEAR_MAX:
         return False, f"training year {year} is outside the matrix range"
@@ -671,20 +678,33 @@ class TrainingScheduleViewSet(ArchiveLifecycleMixin, viewsets.ModelViewSet):
                 {"detail": "The registration deadline has passed."},
                 status=status.HTTP_409_CONFLICT,
             )
-        active = training.registrations.filter(
-            status=TrainingRegistration.Status.REGISTERED
-        )
-        if training.max_slots is not None and active.count() >= training.max_slots:
-            return Response(
-                {"detail": "This training is full."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        if active.filter(user=request.user).exists():
-            return Response(
-                {"detail": "You are already registered for this training."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        reg = TrainingRegistration.objects.create(training=training, user=request.user)
+        already = {"detail": "You are already registered for this training."}
+        try:
+            with transaction.atomic():
+                # Serialise concurrent registers for this training: lock the
+                # row, re-check slots + existing registration, then insert.
+                # The partial unique index (status=REGISTERED) is the
+                # definitive backstop on any backend; select_for_update
+                # additionally serialises the max_slots count on Postgres.
+                locked = TrainingSchedule.objects.select_for_update().get(
+                    pk=training.pk
+                )
+                active = locked.registrations.filter(
+                    status=TrainingRegistration.Status.REGISTERED
+                )
+                if locked.max_slots is not None and active.count() >= locked.max_slots:
+                    return Response(
+                        {"detail": "This training is full."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                if active.filter(user=request.user).exists():
+                    return Response(already, status=status.HTTP_409_CONFLICT)
+                reg = TrainingRegistration.objects.create(
+                    training=locked, user=request.user
+                )
+        except IntegrityError:
+            # Lost the race against a concurrent register — same answer.
+            return Response(already, status=status.HTTP_409_CONFLICT)
         return Response(
             TrainingRegistrationSerializer(reg).data, status=status.HTTP_201_CREATED
         )
@@ -830,14 +850,19 @@ class PersonnelAttendeeViewSet(viewsets.ViewSet):
         serializer = PersonnelAttendeeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         personnel = serializer.validated_data["personnel"]
+        already = {
+            "detail": f"{personnel.name} is already on this training's roster."
+        }
         if PersonnelAttendee.objects.filter(
             training=training, personnel=personnel
         ).exists():
-            return Response(
-                {"detail": f"{personnel.name} is already on this training's roster."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        obj = serializer.save(training=training, added_by=request.user)
+            return Response(already, status=status.HTTP_409_CONFLICT)
+        try:
+            with transaction.atomic():
+                obj = serializer.save(training=training, added_by=request.user)
+        except IntegrityError:
+            # Lost the race against a concurrent add (unique_together backstop).
+            return Response(already, status=status.HTTP_409_CONFLICT)
         return Response(
             PersonnelAttendeeSerializer(obj).data, status=status.HTTP_201_CREATED
         )

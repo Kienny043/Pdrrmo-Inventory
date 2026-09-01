@@ -552,6 +552,7 @@ export default function TrainingsPage() {
   const [editing, setEditing] = useState(null)
   const [expandedId, setExpandedId] = useState(null)
   const [rowMsg, setRowMsg] = useState({}) // { [trainingId]: text } — register/cancel result
+  const [rowBusy, setRowBusy] = useState({}) // { [trainingId]: bool } — register/cancel in flight
 
   const archived = view === 'archived'
 
@@ -577,21 +578,29 @@ export default function TrainingsPage() {
   }, [load])
 
   const register = async (t) => {
+    if (rowBusy[t.id]) return
     setRowMsg((m) => ({ ...m, [t.id]: '' }))
+    setRowBusy((b) => ({ ...b, [t.id]: true }))
     try {
       await apiPost(`/api/trainings/${t.id}/register/`)
       await load()
     } catch (e) {
       setRowMsg((m) => ({ ...m, [t.id]: e.message }))
+    } finally {
+      setRowBusy((b) => ({ ...b, [t.id]: false }))
     }
   }
   const cancelReg = async (t) => {
+    if (rowBusy[t.id]) return
     setRowMsg((m) => ({ ...m, [t.id]: '' }))
+    setRowBusy((b) => ({ ...b, [t.id]: true }))
     try {
       await apiDelete(`/api/trainings/${t.id}/cancel-registration/`)
       await load()
     } catch (e) {
       setRowMsg((m) => ({ ...m, [t.id]: e.message }))
+    } finally {
+      setRowBusy((b) => ({ ...b, [t.id]: false }))
     }
   }
   const archive = async (t) => {
@@ -697,8 +706,8 @@ export default function TrainingsPage() {
                       <Td variant="plain">
                         <div className="flex flex-wrap items-center gap-3">
                           {registered ? (
-                            <TextAction tone="red" confirm={`Cancel your registration for “${t.title}”?`} onClick={() => cancelReg(t)}>
-                              Cancel registration
+                            <TextAction tone="red" disabled={!!rowBusy[t.id]} confirm={`Cancel your registration for “${t.title}”?`} onClick={() => cancelReg(t)}>
+                              {rowBusy[t.id] ? 'Cancelling…' : 'Cancel registration'}
                             </TextAction>
                           ) : block ? (
                             <>
@@ -706,7 +715,9 @@ export default function TrainingsPage() {
                               <span className="text-xs text-pd-text-secondary">{block}</span>
                             </>
                           ) : (
-                            <TextAction tone="navy" onClick={() => register(t)}>Register</TextAction>
+                            <TextAction tone="navy" disabled={!!rowBusy[t.id]} onClick={() => register(t)}>
+                              {rowBusy[t.id] ? 'Registering…' : 'Register'}
+                            </TextAction>
                           )}
                           {t.my_registration_status && (
                             <span className="text-xs text-pd-text-secondary">you: {t.my_registration_status}</span>

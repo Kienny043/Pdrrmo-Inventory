@@ -5,6 +5,7 @@ import datetime
 import shutil
 import tempfile
 import threading
+import time
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -2059,3 +2060,281 @@ class PersonnelRosterAttendanceBridgeTests(TestCase):
             TrainingRecord.objects.filter(personnel=self.p, training_key="RDANA").count(),
             1,
         )
+
+
+# ==========================================================================
+# Wave 1 — audit-response fixes
+#   F3 (Remarks field) is frontend-only, browser-verified.
+#   D1  _matrix_bridge archived guard
+#   D3  double-registration race (partial unique index + view catch)
+#   D4  Personnel.district KeyError guard
+#   roster-add race -> 409 not 500
+# ==========================================================================
+
+
+class Wave1MatrixBridgeArchivedTests(TestCase):
+    """D1: marking attendance must not upsert the matrix for an archived
+    training or an archived Personnel — mirrors the 409 the direct
+    cell-edit endpoint (training_record) already returns."""
+
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+        self.u = make_user("trainee", role=Role.STAFF)
+
+    def test_helper_reports_archived_training(self):
+        from .views import _matrix_bridge
+
+        p = Personnel.objects.create(name="P", municipality="Lucban")
+        t = _sched(
+            title="t", date_start=datetime.date(2026, 2, 1),
+            matrix_training_key="BLS", is_archived=True,
+        )
+        self.assertEqual(_matrix_bridge(t, p), (False, "the training is archived"))
+        self.assertEqual(TrainingRecord.objects.count(), 0)
+
+    def test_helper_reports_archived_personnel(self):
+        from .views import _matrix_bridge
+
+        p = Personnel.objects.create(
+            name="P", municipality="Lucban", is_archived=True
+        )
+        t = _sched(
+            title="t", date_start=datetime.date(2026, 2, 1),
+            matrix_training_key="BLS",
+        )
+        self.assertEqual(
+            _matrix_bridge(t, p), (False, "the personnel record is archived")
+        )
+        self.assertEqual(TrainingRecord.objects.count(), 0)
+
+    def test_helper_still_neutral_for_the_unchanged_branches(self):
+        # no-matrix-key precedence must still beat the archived checks
+        from .views import _matrix_bridge
+
+        p = Personnel.objects.create(name="P", municipality="Lucban")
+        t = _sched(title="t", matrix_training_key="", is_archived=True)
+        self.assertEqual(
+            _matrix_bridge(t, p),
+            (False, "the training has no matrix_training_key"),
+        )
+
+    def test_user_linked_attendance_on_archived_training_skips_matrix(self):
+        t = _sched(
+            title="BLS", date_start=datetime.date(2026, 2, 1),
+            status=_TS.ONGOING, matrix_training_key="BLS",
+        )
+        TrainingRegistration.objects.create(training=t, user=self.u)
+        Personnel.objects.create(name="P", municipality="Lucban", user=self.u)
+        t.is_archived = True
+        t.save(update_fields=["is_archived"])
+        r = self.c.patch(
+            f"/api/trainings/{t.pk}/attendance/{self.u.pk}/",
+            {"attended": True}, format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.json()["matrix_updated"])
+        self.assertIn("archived", r.json()["matrix_reason"])
+        self.assertEqual(TrainingRecord.objects.count(), 0)
+
+    def test_roster_attendance_for_archived_personnel_skips_matrix(self):
+        t = _sched(
+            title="RDANA", date_start=datetime.date(2026, 2, 1),
+            matrix_training_key="RDANA",
+        )
+        p = Personnel.objects.create(name="P", municipality="Catanauan")
+        pa = PersonnelAttendee.objects.create(training=t, personnel=p)
+        p.is_archived = True
+        p.save(update_fields=["is_archived"])
+        r = self.c.patch(
+            f"/api/trainings/{t.pk}/personnel-attendees/{pa.pk}/attendance/",
+            {"attended": True}, format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.json()["matrix_updated"])
+        self.assertIn("archived", r.json()["matrix_reason"])
+        self.assertEqual(TrainingRecord.objects.count(), 0)
+
+    def test_unmarking_on_archived_training_still_ok_and_keeps_record(self):
+        # attended:false never calls the bridge — the archived guard must not
+        # break the un-mark path or delete an existing record.
+        t = _sched(
+            title="BLS", date_start=datetime.date(2026, 2, 1),
+            status=_TS.ONGOING, matrix_training_key="BLS",
+        )
+        TrainingRegistration.objects.create(training=t, user=self.u)
+        p = Personnel.objects.create(name="P", municipality="Lucban", user=self.u)
+        self.c.patch(
+            f"/api/trainings/{t.pk}/attendance/{self.u.pk}/",
+            {"attended": True}, format="json",
+        )
+        self.assertEqual(TrainingRecord.objects.filter(personnel=p).count(), 1)
+        t.is_archived = True
+        t.save(update_fields=["is_archived"])
+        r = self.c.patch(
+            f"/api/trainings/{t.pk}/attendance/{self.u.pk}/",
+            {"attended": False}, format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(TrainingRecord.objects.filter(personnel=p).count(), 1)
+
+
+class Wave1DistrictGuardTests(TestCase):
+    """D4: a Personnel with an unrecognised municipality (a stale admin/shell
+    write) yields district=None instead of raising KeyError and 500ing the
+    whole personnel list."""
+
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.c = APIClient()
+        self.c.force_authenticate(user=self.admin)
+
+    def _ghost(self):
+        # save() does not run choices validation — the same door a stale
+        # reference change or a shell write would come through.
+        p = Personnel(name="Ghost", municipality="Nowheresville")
+        p.save()
+        return p
+
+    def test_property_returns_none_for_unknown_municipality(self):
+        self.assertIsNone(self._ghost().district)
+
+    def test_list_endpoint_does_not_500(self):
+        Personnel.objects.create(name="Good", municipality="Lucban")
+        self._ghost()
+        r = self.c.get("/api/personnel/?archived=all")
+        self.assertEqual(r.status_code, 200)
+        by_name = {row["name"]: row["district"] for row in r.json()}
+        self.assertEqual(by_name["Good"], "First District")
+        self.assertIsNone(by_name["Ghost"])
+
+
+class Wave1RegistrationRaceTests(TransactionTestCase):
+    """D3: two concurrent register calls for the same (training, user) must
+    not create two REGISTERED rows — the partial unique index is the
+    backstop and the view turns the IntegrityError into the same 409."""
+
+    def test_concurrent_double_register_yields_one_row(self):
+        t = TrainingSchedule.objects.create(
+            title="Race", date_start=datetime.date(2026, 6, 1),
+            status=TrainingSchedule.Status.UPCOMING,
+        )
+        u = User.objects.create_user("racer", password="pw")
+        profile_for(u)
+        barrier = threading.Barrier(2)
+        results = {}
+
+        def worker(tag):
+            client = APIClient()
+            client.force_authenticate(user=u)
+            barrier.wait()
+            for attempt in range(6):
+                try:
+                    results[tag] = client.post(
+                        f"/api/trainings/{t.pk}/register/"
+                    ).status_code
+                    break
+                except Exception as exc:  # "database is locked" on SQLite
+                    if "locked" in str(exc).lower() and attempt < 5:
+                        time.sleep(0.05 * (attempt + 1))
+                        continue
+                    results[tag] = f"error:{type(exc).__name__}"
+                    break
+            connection.close()
+
+        threads = [threading.Thread(target=worker, args=(f"t{i}",)) for i in range(2)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        registered = TrainingRegistration.objects.filter(
+            training=t, user=u, status=TrainingRegistration.Status.REGISTERED
+        )
+        self.assertEqual(registered.count(), 1, results)
+        self.assertIn(201, results.values(), results)
+        self.assertIn(409, results.values(), results)
+        self.assertNotIn(500, results.values(), results)
+
+    def test_cancel_then_reregister_still_allowed_with_the_constraint(self):
+        # the partial index is on status=REGISTERED only — a CANCELLED row
+        # plus a fresh REGISTERED one must still be legal (spec 2.6).
+        t = TrainingSchedule.objects.create(
+            title="Recycle", date_start=datetime.date(2026, 6, 1),
+            status=TrainingSchedule.Status.UPCOMING,
+        )
+        u = User.objects.create_user("recycler", password="pw")
+        profile_for(u)
+        client = APIClient()
+        client.force_authenticate(user=u)
+        self.assertEqual(
+            client.post(f"/api/trainings/{t.pk}/register/").status_code, 201
+        )
+        self.assertEqual(
+            client.delete(
+                f"/api/trainings/{t.pk}/cancel-registration/"
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            client.post(f"/api/trainings/{t.pk}/register/").status_code, 201
+        )
+        self.assertEqual(
+            sorted(
+                TrainingRegistration.objects.filter(
+                    training=t, user=u
+                ).values_list("status", flat=True)
+            ),
+            ["CANCELLED", "REGISTERED"],
+        )
+
+
+class Wave1RosterAddRaceTests(TransactionTestCase):
+    """PersonnelAttendee.create: a concurrent duplicate add returns the same
+    409 as the sequential case, never a raw 500 from the unique_together
+    IntegrityError."""
+
+    def test_concurrent_double_add_yields_one_row_and_409(self):
+        t = TrainingSchedule.objects.create(
+            title="Roster race", date_start=datetime.date(2026, 6, 1),
+        )
+        p = Personnel.objects.create(name="Dup", municipality="Lucban")
+        admin = User.objects.create_user("adm", password="pw")
+        prof = profile_for(admin)
+        prof.role = Role.ADMIN
+        prof.save()
+        barrier = threading.Barrier(2)
+        results = {}
+        url = f"/api/trainings/{t.pk}/personnel-attendees/"
+
+        def worker(tag):
+            client = APIClient()
+            client.force_authenticate(user=admin)
+            barrier.wait()
+            for attempt in range(6):
+                try:
+                    results[tag] = client.post(
+                        url, {"personnel": p.pk}, format="json"
+                    ).status_code
+                    break
+                except Exception as exc:
+                    if "locked" in str(exc).lower() and attempt < 5:
+                        time.sleep(0.05 * (attempt + 1))
+                        continue
+                    results[tag] = f"error:{type(exc).__name__}"
+                    break
+            connection.close()
+
+        threads = [threading.Thread(target=worker, args=(f"t{i}",)) for i in range(2)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        self.assertEqual(
+            PersonnelAttendee.objects.filter(training=t).count(), 1, results
+        )
+        self.assertIn(201, results.values(), results)
+        self.assertIn(409, results.values(), results)
+        self.assertNotIn(500, results.values(), results)

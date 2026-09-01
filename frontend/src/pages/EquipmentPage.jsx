@@ -40,6 +40,7 @@ function ItemForm({ item, categories, staff, onSaved, onCancel }) {
     name: item?.name ?? '',
     brand: item?.brand ?? '',
     description: item?.description ?? '',
+    remarks: item?.remarks ?? '',
     quantity: item?.quantity != null ? String(item.quantity) : '1',
     unit: item?.unit ?? '',
     condition: item?.condition ?? 'GOOD',
@@ -63,6 +64,7 @@ function ItemForm({ item, categories, staff, onSaved, onCancel }) {
         name: values.name,
         brand: values.brand,
         description: values.description,
+        remarks: values.remarks,
         unit: values.unit,
         condition: values.condition,
         date_acquired: values.date_acquired || null,
@@ -146,8 +148,11 @@ function ItemForm({ item, categories, staff, onSaved, onCancel }) {
       <Field label="Date acquired">
         <input type="date" className={INPUT_CLASS} value={values.date_acquired} onChange={set('date_acquired')} />
       </Field>
-      <Field label="Remarks">
+      <Field label="Description">
         <textarea className={INPUT_CLASS} rows={2} value={values.description} onChange={set('description')} />
+      </Field>
+      <Field label="Remarks">
+        <textarea className={INPUT_CLASS} rows={2} value={values.remarks} onChange={set('remarks')} />
       </Field>
       <Field label="Image">
         <input type="file" accept="image/*" className="text-sm" onChange={(e) => setFile(e.target.files[0] || null)} />
