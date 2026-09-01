@@ -504,11 +504,43 @@ Work through these in order, confirming before moving to the next step.
   - Teardown: `seed_personnel --flush` + explicit drop of the fixture
       users / Category / Item / workflow rows → back to the pristine
       20 Personnel / 73 TrainingRecords / 2 archived baseline.
-- [ ] 10. Deploy (Render + external Postgres, unless a faster option
-       makes more sense at that point). The single-origin serving
-       mechanism is already wired (`WHITENOISE_ROOT = frontend/dist`,
-       SPA catch-all) — a deploy needs the build/collectstatic/migrate
-       steps + Render config, nothing more in the app.
+- [ ] 10. Deploy (Render + external Neon Postgres). **Deploy config
+       committed; provisioning in progress.**
+  - **Config (committed):** repo-root `Dockerfile` (multi-stage:
+    `node:22` builds `frontend/dist/` → `python:3.13-slim` installs the
+    backend, copies the built SPA to `BASE_DIR.parent/frontend/dist`,
+    runs `collectstatic`, `CMD gunicorn config.wsgi`). `render.yaml`
+    Blueprint (single `web` service, `runtime: docker`, `region:
+    singapore`, `plan: free`, `healthCheckPath: /`, `preDeployCommand:
+    python manage.py migrate --noinput`; `DJANGO_SECRET_KEY` +
+    `DATABASE_URL` are `sync: false` = entered in Render's dashboard,
+    never in the file). `.dockerignore`. `settings.py` gained a
+    **DEBUG-gated** hardening block (`SECURE_PROXY_SSL_HEADER`, secure
+    session/CSRF cookies; `RENDER_EXTERNAL_HOSTNAME` auto-folded into
+    `ALLOWED_HOSTS` + `CSRF_TRUSTED_ORIGINS` so the `*.onrender.com`
+    host needn't be hardcoded). No `SECURE_SSL_REDIRECT` — Render's edge
+    already forces HTTPS and it risks a health-check redirect loop.
+  - **Why Docker, not a native Render Python service:** Render's Python
+    runtime ships Node 18 and can't pin it (`NODE_VERSION` is
+    Node-runtime-only); Vite 8 needs Node ≥ 20.19.
+  - **Database:** Neon free tier (Singapore), external — not a Render
+    DB (Render's own free Postgres expires after 30 days). First
+    `migrate` applies `core/0001`–`0007` against the empty DB via the
+    pre-deploy command. **Production starts empty** — no
+    `seed_personnel` in prod (the client enters real data); the real
+    admin is made once via `createsuperuser` in Render Shell after the
+    first green deploy, never `admin`/`admin`.
+  - **Media is a documented v1 limitation:** Staff photos /
+    `InventoryItem` images upload fine but are **not persisted** — the
+    `/media/` route is `DEBUG`-only and Render's filesystem is
+    ephemeral (wiped every deploy/restart). Both pages degrade to a
+    `—` placeholder. The `django-storages` + Cloudflare R2 fix is an
+    explicit out-of-scope fast-follow.
+  - **Env vars on Render:** secret (dashboard only) —
+    `DJANGO_SECRET_KEY` (generate fresh), `DATABASE_URL` (from Neon).
+    Plain — `DJANGO_DEBUG=False`. Not needed:
+    `CORS_ALLOWED_ORIGINS`/`CSRF_TRUSTED_ORIGINS` (single-origin +
+    auto-fold), a separate JWT key (SimpleJWT signs with `SECRET_KEY`).
 - [ ] 11. *(Later, separate effort)* Integration into `PDRRMO_v3`'s
        real React frontend and JWT/role system. **Unchanged in scope by
        the R1–R7 rebuild** — this project's React SPA being production

@@ -1,0 +1,29 @@
+# Render Blueprint for the single-origin deploy (spec Section 7, step 10).
+#
+# One web service, built from the multi-stage Dockerfile. Postgres is an
+# EXTERNAL free database (Neon, Singapore) — not defined here — passed in as
+# DATABASE_URL. Secrets (DJANGO_SECRET_KEY, DATABASE_URL) are `sync: false`,
+# so Render prompts for them in the dashboard and never reads them from this
+# committed file.
+#
+# DJANGO_ALLOWED_HOSTS / CSRF_TRUSTED_ORIGINS are intentionally omitted:
+# settings.py folds in RENDER_EXTERNAL_HOSTNAME automatically.
+
+services:
+  - type: web
+    name: inventory-system
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    region: singapore
+    plan: free
+    branch: main
+    healthCheckPath: /
+    preDeployCommand: python manage.py migrate --noinput
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
