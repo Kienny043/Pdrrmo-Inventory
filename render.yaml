@@ -8,6 +8,9 @@
 #
 # DJANGO_ALLOWED_HOSTS / CSRF_TRUSTED_ORIGINS are intentionally omitted:
 # settings.py folds in RENDER_EXTERNAL_HOSTNAME automatically.
+#
+# Migrations run in the Docker CMD (`migrate` then `exec gunicorn`), not as a
+# preDeployCommand — pre-deploy hooks are paid-plan only on Render.
 
 services:
   - type: web
@@ -19,7 +22,6 @@ services:
     plan: free
     branch: main
     healthCheckPath: /
-    preDeployCommand: python manage.py migrate --noinput
     envVars:
       - key: DJANGO_DEBUG
         value: "False"

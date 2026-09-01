@@ -7,8 +7,8 @@
 #
 # A Dockerfile (not a native Render Python service) because Render's Python
 # runtime ships Node 18 and can't pin it — Vite 8 needs Node >= 20.19.
-# `migrate` is NOT here (no DB at build time) — it runs as Render's
-# pre-deploy command.
+# `migrate` runs in the start command (below), not at build (no DB then) and
+# not as a pre-deploy command (paid-plan only on Render).
 
 # ---------------------------------------------------------------------------
 FROM node:22-bookworm-slim AS frontend
@@ -47,4 +47,8 @@ RUN DJANGO_SECRET_KEY="build-only-not-a-runtime-secret" \
     python manage.py collectstatic --noinput
 
 EXPOSE 10000
-CMD ["sh", "-c", "gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-10000} --workers 2 --timeout 60"]
+# Free plan has no pre-deploy hook, so apply migrations here then hand off to
+# gunicorn (exec -> gunicorn is PID 1, gets signals). `migrate --noinput` is a
+# ~1s no-op when there is nothing to apply; a failed migration crashes the
+# container and Render keeps the previous version live.
+CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-10000} --workers 2 --timeout 60"]

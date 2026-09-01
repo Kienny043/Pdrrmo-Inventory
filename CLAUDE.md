@@ -509,12 +509,14 @@ Work through these in order, confirming before moving to the next step.
   - **Config (committed):** repo-root `Dockerfile` (multi-stage:
     `node:22` builds `frontend/dist/` → `python:3.13-slim` installs the
     backend, copies the built SPA to `BASE_DIR.parent/frontend/dist`,
-    runs `collectstatic`, `CMD gunicorn config.wsgi`). `render.yaml`
-    Blueprint (single `web` service, `runtime: docker`, `region:
-    singapore`, `plan: free`, `healthCheckPath: /`, `preDeployCommand:
-    python manage.py migrate --noinput`; `DJANGO_SECRET_KEY` +
-    `DATABASE_URL` are `sync: false` = entered in Render's dashboard,
-    never in the file). `.dockerignore`. `settings.py` gained a
+    runs `collectstatic`; `CMD` = `migrate --noinput && exec gunicorn
+    config.wsgi`). `render.yaml` Blueprint (single `web` service,
+    `runtime: docker`, `region: singapore`, `plan: free`,
+    `healthCheckPath: /`; `DJANGO_SECRET_KEY` + `DATABASE_URL` are
+    `sync: false` = entered in Render's dashboard, never in the file).
+    Migrations run in the Docker `CMD`, **not** a pre-deploy hook
+    (paid-plan only on Render free). `.dockerignore`. `settings.py`
+    gained a
     **DEBUG-gated** hardening block (`SECURE_PROXY_SSL_HEADER`, secure
     session/CSRF cookies; `RENDER_EXTERNAL_HOSTNAME` auto-folded into
     `ALLOWED_HOSTS` + `CSRF_TRUSTED_ORIGINS` so the `*.onrender.com`
@@ -525,8 +527,8 @@ Work through these in order, confirming before moving to the next step.
     Node-runtime-only); Vite 8 needs Node ≥ 20.19.
   - **Database:** Neon free tier (Singapore), external — not a Render
     DB (Render's own free Postgres expires after 30 days). First
-    `migrate` applies `core/0001`–`0007` against the empty DB via the
-    pre-deploy command. **Production starts empty** — no
+    `migrate` applies `core/0001`–`0007` against the empty DB (run from
+    the Docker `CMD` on container start). **Production starts empty** — no
     `seed_personnel` in prod (the client enters real data); the real
     admin is made once via `createsuperuser` in Render Shell after the
     first green deploy, never `admin`/`admin`.
