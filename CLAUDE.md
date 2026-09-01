@@ -46,7 +46,7 @@ doesn't need to reach into a sibling repo for its own spec.
 | Database       | SQLite (local dev, default) / PostgreSQL via `DATABASE_URL` (prod — `dj-database-url` 2.3.0, `psycopg2-binary` 2.9.10) |
 | Static files   | `whitenoise` 6.8.2 (`CompressedManifestStaticFilesStorage`) for admin assets; also serves the built SPA (`WHITENOISE_ROOT = frontend/dist`) |
 | Config         | `python-dotenv` 1.2.2, `.env`-based (`backend/.env`, gitignored; `backend/.env.example` checked in). `django-cors-headers` 4.9.0 wired but env-gated + empty (single-origin deploy). |
-| Deployment     | `gunicorn` 23.0.0. **Single-origin:** Django + whitenoise serves `frontend/dist/` (`/` + `/assets/*` as real files, a SPA catch-all → `index.html` for client-side routes); no CORS. Render + external Postgres planned (spec Section 7 step 10). |
+| Deployment     | `gunicorn` 23.0.0. **Single-origin:** Django + whitenoise serves `frontend/dist/` (`/` + `/assets/*` as real files, a SPA catch-all → `index.html` for client-side routes); no CORS. **LIVE** at `https://pdrrmo-inventory.onrender.com` — Render Docker web service (Singapore, free) + external Neon Postgres (Singapore, free). Multi-stage `Dockerfile` (`node:22` SPA build → `python:3.13-slim`), `render.yaml` Blueprint, migrations in the container `CMD`. See build-order step 10. |
 | Frontend       | **React 19 + Vite 8 + Tailwind v4 SPA** (`frontend/`, own `package.json`; `react-router-dom` v7, `axios`, `lucide-react`). Design matches `PDRRMO_v3` per `docs/design-system-export.md`. Dev: Vite server proxies `/api` `/admin` `/media` to Django on `:8000`. *(The original plain-Django-templates + vanilla-JS frontend — Step 7 — was rebuilt in React across R1–R7 and deleted at R7; see below.)* |
 | Timezone       | `Asia/Manila`                                                 |
 
@@ -504,49 +504,92 @@ Work through these in order, confirming before moving to the next step.
   - Teardown: `seed_personnel --flush` + explicit drop of the fixture
       users / Category / Item / workflow rows → back to the pristine
       20 Personnel / 73 TrainingRecords / 2 archived baseline.
-- [ ] 10. Deploy (Render + external Neon Postgres). **Deploy config
-       committed; provisioning in progress.**
-  - **Config (committed):** repo-root `Dockerfile` (multi-stage:
-    `node:22` builds `frontend/dist/` → `python:3.13-slim` installs the
-    backend, copies the built SPA to `BASE_DIR.parent/frontend/dist`,
-    runs `collectstatic`; `CMD` = `migrate --noinput && exec gunicorn
-    config.wsgi`). `render.yaml` Blueprint (single `web` service,
-    `runtime: docker`, `region: singapore`, `plan: free`,
-    `healthCheckPath: /`; `DJANGO_SECRET_KEY` + `DATABASE_URL` are
-    `sync: false` = entered in Render's dashboard, never in the file).
-    Migrations run in the Docker `CMD`, **not** a pre-deploy hook
-    (paid-plan only on Render free). `.dockerignore`. `settings.py`
-    gained a
-    **DEBUG-gated** hardening block (`SECURE_PROXY_SSL_HEADER`, secure
-    session/CSRF cookies; `RENDER_EXTERNAL_HOSTNAME` auto-folded into
-    `ALLOWED_HOSTS` + `CSRF_TRUSTED_ORIGINS` so the `*.onrender.com`
-    host needn't be hardcoded). No `SECURE_SSL_REDIRECT` — Render's edge
-    already forces HTTPS and it risks a health-check redirect loop.
-    Also `WHITENOISE_IMMUTABLE_FILE_TEST` → `url.startswith("/assets/")`
-    so Vite's `name-HASH.ext` bundles get `Cache-Control: immutable`
-    (whitenoise's default heuristic only recognises a dotted
-    lowercase-hex hash; `index.html` at `/` stays revalidated).
-  - **Why Docker, not a native Render Python service:** Render's Python
-    runtime ships Node 18 and can't pin it (`NODE_VERSION` is
-    Node-runtime-only); Vite 8 needs Node ≥ 20.19.
-  - **Database:** Neon free tier (Singapore), external — not a Render
-    DB (Render's own free Postgres expires after 30 days). First
-    `migrate` applies `core/0001`–`0007` against the empty DB (run from
-    the Docker `CMD` on container start). **Production starts empty** — no
-    `seed_personnel` in prod (the client enters real data); the real
-    admin is made once via `createsuperuser` in Render Shell after the
-    first green deploy, never `admin`/`admin`.
-  - **Media is a documented v1 limitation:** Staff photos /
-    `InventoryItem` images upload fine but are **not persisted** — the
-    `/media/` route is `DEBUG`-only and Render's filesystem is
-    ephemeral (wiped every deploy/restart). Both pages degrade to a
-    `—` placeholder. The `django-storages` + Cloudflare R2 fix is an
-    explicit out-of-scope fast-follow.
-  - **Env vars on Render:** secret (dashboard only) —
-    `DJANGO_SECRET_KEY` (generate fresh), `DATABASE_URL` (from Neon).
-    Plain — `DJANGO_DEBUG=False`. Not needed:
-    `CORS_ALLOWED_ORIGINS`/`CSRF_TRUSTED_ORIGINS` (single-origin +
-    auto-fold), a separate JWT key (SimpleJWT signs with `SECRET_KEY`).
+- [x] **10. Deploy — DONE.** Live at
+      **`https://pdrrmo-inventory.onrender.com`** (Render web service,
+      Docker runtime, Singapore, free plan) + external **Neon** Postgres
+      (free, Singapore). Config in `Dockerfile` + `render.yaml` +
+      `.dockerignore` at the repo root; `settings.py` production block.
+      No new migration. Verified end-to-end: full smoke test green + a
+      real Personnel row created through the live UI survived a hard
+      reload (Neon + `core/0001`–`0007` genuinely wired).
+  - **Docker, not a native Render Python service:** Render's native
+    runtimes *do* include `node`/`npm`, but the Python runtime ships
+    **Node 18** and it is **not pinnable** there (`NODE_VERSION` /
+    `.node-version` are Node-runtime-only; the "updated default
+    versions" changelog only bumps the Node runtime). Vite 8 requires
+    Node **≥ 20.19 / 22.12**. So the multi-stage `Dockerfile` pins
+    `node:22` for the SPA build → `python:3.13-slim` for the runtime
+    (installs the backend, copies the built SPA to
+    `BASE_DIR.parent/frontend/dist`, runs `collectstatic`).
+  - **Migrations run in the Docker `CMD`** (`migrate --noinput && exec
+    gunicorn config.wsgi`), because Render **pre-deploy hooks are
+    paid-plan only**. `migrate` is a ~1 s no-op when nothing is pending;
+    a failed migration crashes the container and Render keeps the
+    previous version live. No DB at build time, so it can't go in a
+    `RUN` layer.
+  - **DEBUG config gotcha (cost one bad first deploy):** the first
+    deploy ran with `DEBUG=True` — `render.yaml`'s `DJANGO_DEBUG:
+    "False"` never took effect because the service was **not created
+    from the Blueprint** at Stage C, so its `envVars` were never applied
+    and `DJANGO_DEBUG` was simply absent (settings.py defaults to
+    `"True"`). **Fix / for next time:** either create the service **from
+    the Blueprint** (`render.yaml`) so its `envVars` sync, or, on a
+    manually-created service, set `DJANGO_DEBUG=False` explicitly in the
+    Environment tab alongside the two secrets. Detect it fast: `GET
+    /<bogus-path>` returns Django's verbose "tried these URL patterns"
+    404 only under `DEBUG=True`; the `csrftoken` cookie lacks `Secure`;
+    admin static filenames come through unhashed.
+  - **`settings.py` production block (DEBUG-gated, local dev untouched;
+    Django's test runner flips `settings.DEBUG` only at runtime, after
+    this module-level block has already been skipped):**
+    `SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")` +
+    `SESSION_COOKIE_SECURE` / `CSRF_COOKIE_SECURE`. **No
+    `SECURE_SSL_REDIRECT`** — Render's edge already forces HTTP→HTTPS
+    and an in-app redirect risks a health-check loop. Not gated:
+    `RENDER_EXTERNAL_HOSTNAME` auto-appended to `ALLOWED_HOSTS` and, as
+    `https://<host>`, to `CSRF_TRUSTED_ORIGINS` (the admin's session
+    login POST needs its HTTPS origin trusted). Also
+    `WHITENOISE_IMMUTABLE_FILE_TEST` → true for `/assets/*` (Vite
+    `name-HASH.ext`) **and** `/static/…​.<hexhash>.ext` (collectstatic
+    manifest) so both get `Cache-Control: immutable`; `index.html` at
+    `/` stays `max-age=60` so redeploys are picked up. (Setting it
+    *replaces* whitenoise's built-in test, which only covered the
+    `/static/` manifest case — hence the two-branch check.)
+  - **Env vars on Render** — secret (dashboard only):
+    `DJANGO_SECRET_KEY` (fresh, never the dev value), `DATABASE_URL`
+    (Neon pooled string). Plain: `DJANGO_DEBUG=False`. *Not set* —
+    `DJANGO_ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS` (the
+    `RENDER_EXTERNAL_HOSTNAME` auto-fold covers both; verified live —
+    `GET /` is 200 under `DEBUG=False`, and the admin login POST is not
+    CSRF-rejected), `CORS_*` (single-origin), a JWT key (SimpleJWT signs
+    with `SECRET_KEY`).
+  - **Database:** Neon free tier, Singapore, external — **not** a Render
+    DB (Render's own free Postgres expires after 30 days). Use the
+    **pooled** connection string. **Production starts empty** — no
+    `seed_personnel` in prod. The real superuser was made once via
+    `python manage.py createsuperuser` in **Render Shell** (superuser ⇒
+    full ADMIN + `can_permanently_delete` automatically, via the
+    `_is_admin` / `_can_permanently_delete` superuser short-circuits and
+    the `UserProfile` `post_save` signal), never `admin`/`admin`.
+  - **Media = v1 limitation:** Staff photos / `InventoryItem` images
+    upload fine but **do not persist** — the `/media/` route is
+    `DEBUG`-only and Render's disk is ephemeral (wiped every
+    deploy/restart/cold-start). Both pages degrade to a `—`
+    placeholder. `django-storages` + Cloudflare R2 is the out-of-scope
+    fast-follow.
+  - **Free-tier behaviour:** the web service **sleeps after ~15 min
+    idle**; the next request cold-starts in ~30–60 s (then the `CMD`'s
+    `migrate` runs again, ~1 s). Neon also auto-suspends and resumes in
+    <1 s. Fine for a bursty internal tool; a paid Render Starter plan
+    removes the sleep. **Auto-deploys on every push to `main`** (build →
+    `migrate` → swap; the old version stays live if the build or
+    migrate fails).
+  - **Smoke test (all green):** `GET /` 200 · `/assets/*` `immutable` ·
+    deep-link `/trainings` 200 (SPA catch-all) · `/api/me/` 401 anon ·
+    `/admin/` → login 200 · headless browser boots, routes to `/login`,
+    zero console/page/network errors · `http://` → 301 `https://` ·
+    `DEBUG=False` confirmed three ways · a UI-created Personnel row
+    persisted across a hard reload.
 - [ ] 11. *(Later, separate effort)* Integration into `PDRRMO_v3`'s
        real React frontend and JWT/role system. **Unchanged in scope by
        the R1–R7 rebuild** — this project's React SPA being production
@@ -1163,11 +1206,14 @@ Personnel-roster attendance** — new `PersonnelAttendee` model (migration
 section with a search-as-you-type picker in the Trainings page (see the
 dedicated section above).
 
-**The whole R1–R7 React rebuild is complete. Steps 1–9 done + R1–R7
-done.** Step 10 (deploy — Render + external Postgres; the single-origin
-serving mechanism is already wired) is the last build-order item. Step
-11 (fold this project's React frontend into `PDRRMO_v3`'s actual app +
-its role/JWT system) remains a later, separate effort — **unchanged in
+**The whole R1–R7 React rebuild is complete. Steps 1–10 done + R1–R7
+done.** **Step 10 (deploy) is DONE** — live at
+`https://pdrrmo-inventory.onrender.com` (Render Docker web service,
+Singapore, free) + external Neon Postgres (see the Step 10 section above
+for the Docker-vs-native rationale, the `DEBUG` Blueprint gotcha, the
+media v1 limitation, and free-tier cold-start behaviour). Step 11 (fold
+this project's React frontend into `PDRRMO_v3`'s actual app + its
+role/JWT system) remains a later, separate effort — **unchanged in
 scope**; the SPA now being production here doesn't advance it. Then a
 **logic / data-consistency audit** (see the section above). **Wave 1**
 landed: `core/0007` (partial unique index on active
