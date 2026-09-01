@@ -22,6 +22,7 @@ const TABS = [
     url: '/api/items/archived/',
     base: '/api/items/',
     history: 'item',
+    deleteWarn: 'Its stock-movement and holder-log history will be permanently deleted too.',
     cols: [
       { h: 'Name', f: 'name' },
       { h: 'Brand', f: 'brand' },
@@ -29,6 +30,7 @@ const TABS = [
       { h: 'Qty', f: 'quantity' },
       { h: 'Condition', f: 'condition' },
       { h: 'Archived', f: 'archived_at', fmt: fdate },
+      { h: 'Archived by', f: 'archived_by' },
     ],
   },
   {
@@ -42,6 +44,7 @@ const TABS = [
       { h: 'Department', f: 'department' },
       { h: 'Status', f: 'status' },
       { h: 'Archived', f: 'archived_at', fmt: fdate },
+      { h: 'Archived by', f: 'archived_by' },
     ],
   },
   {
@@ -50,12 +53,14 @@ const TABS = [
     url: '/api/trainings/archived/',
     base: '/api/trainings/',
     history: 'training',
+    deleteWarn: 'Its registrations, attendance, and roster will be permanently deleted too.',
     cols: [
       { h: 'Title', f: 'title' },
       { h: 'Start', f: 'date_start' },
       { h: 'Status', f: 'status' },
       { h: 'Matrix training', f: 'matrix_training_label' },
       { h: 'Archived', f: 'archived_at', fmt: fdate },
+      { h: 'Archived by', f: 'archived_by' },
     ],
   },
   {
@@ -63,12 +68,14 @@ const TABS = [
     label: 'Personnel',
     url: '/api/personnel/?archived=true',
     base: '/api/personnel/',
+    deleteWarn: 'Its training-matrix records will be permanently deleted too.',
     cols: [
       { h: 'Name', f: 'name' },
       { h: 'Designation', f: 'designation' },
       { h: 'Municipality', f: 'municipality' },
       { h: 'District', f: 'district' },
       { h: 'Archived', f: 'archived_at', fmt: fdate },
+      { h: 'Archived by', f: 'archived_by' },
     ],
   },
 ]
@@ -182,7 +189,9 @@ export default function ArchivedPage() {
                       {canDelete && (
                         <TextAction
                           tone="red"
-                          confirm={`Permanently delete "${labelOf(r)}"? This cannot be undone.`}
+                          confirm={`Permanently delete "${labelOf(r)}"? This cannot be undone.${
+                            tab.deleteWarn ? ' ' + tab.deleteWarn : ''
+                          }`}
                           onClick={() => permaDelete(r)}
                         >
                           Delete permanently

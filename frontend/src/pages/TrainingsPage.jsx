@@ -353,8 +353,6 @@ function RosterPanel({ training, municipalities }) {
         <h3 className="text-sm font-bold mb-2" style={{ fontFamily: "'Sora', sans-serif" }}>Registrations</h3>
         {!regs ? (
           <LoadingSection />
-        ) : regs.length === 0 ? (
-          <p className="text-xs text-pd-text-secondary">No registrations.</p>
         ) : (
           <Table>
             <THead>
@@ -387,6 +385,13 @@ function RosterPanel({ training, municipalities }) {
                   </Td>
                 </Tr>
               ))}
+              {regs.length === 0 && (
+                <tr>
+                  <td colSpan={5}>
+                    <p className="text-xs text-pd-text-secondary px-4 py-3">No registrations.</p>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </Table>
         )}
@@ -740,7 +745,7 @@ export default function TrainingsPage() {
                             <>
                               <TextAction tone="green" onClick={() => restore(t)}>Restore</TextAction>
                               {canDelete && (
-                                <TextAction tone="red" confirm={`Permanently delete “${t.title}”? This cannot be undone.`} onClick={() => permaDelete(t)}>
+                                <TextAction tone="red" confirm={`Permanently delete “${t.title}”? This cannot be undone. Its registrations, attendance, and roster will be permanently deleted too.`} onClick={() => permaDelete(t)}>
                                   Delete
                                 </TextAction>
                               )}

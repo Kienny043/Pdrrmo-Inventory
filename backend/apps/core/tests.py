@@ -1903,7 +1903,7 @@ class PersonnelRosterModelTests(TestCase):
         )
         self.assertEqual(
             _matrix_bridge(t_ok, None),
-            (False, "the attending user has no linked Personnel record"),
+            (False, "the attendee has no linked Personnel record"),
         )
         updated, reason = _matrix_bridge(t_oldyear, p)
         self.assertFalse(updated)
@@ -2500,3 +2500,80 @@ class Wave2RequestWithdrawTests(TestCase):
         req = self._pending(self.s1)
         r = APIClient().delete(f"/api/requests/{req.pk}/withdraw/")
         self.assertEqual(r.status_code, 401)
+
+
+# ==========================================================================
+# Wave 3 — UX polish
+#   S1  archived-record detail retrieve is ADMIN-only (was readable by STAFF)
+#   S2  path-neutral _matrix_bridge "no linked Personnel" wording
+#   U1 / U2 / U4 / D2 are frontend-only, browser-verified
+# ==========================================================================
+
+
+class Wave3ArchivedDetailRetrieveTests(TestCase):
+    """S1: an archived item/training detail endpoint 404s for STAFF (their
+    list already hides it); ADMIN still retrieves it."""
+
+    def setUp(self):
+        self.admin = make_user("a", role=Role.ADMIN)
+        self.staff = make_user("s", role=Role.STAFF)
+        self.cat = Category.objects.create(name="C")
+        self.item = InventoryItem.objects.create(
+            category=self.cat, name="Radio", quantity=1, is_archived=True
+        )
+        self.training = _sched(title="Archived Course", is_archived=True)
+        self.active_item = InventoryItem.objects.create(
+            category=self.cat, name="Live Radio", quantity=1
+        )
+
+    def cli(self, user):
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def test_staff_gets_404_on_archived_item_detail(self):
+        r = self.cli(self.staff).get(f"/api/items/{self.item.pk}/")
+        self.assertEqual(r.status_code, 404)
+
+    def test_staff_gets_404_on_archived_training_detail(self):
+        r = self.cli(self.staff).get(f"/api/trainings/{self.training.pk}/")
+        self.assertEqual(r.status_code, 404)
+
+    def test_staff_still_sees_active_item_detail(self):
+        r = self.cli(self.staff).get(f"/api/items/{self.active_item.pk}/")
+        self.assertEqual(r.status_code, 200)
+
+    def test_admin_still_retrieves_archived_detail(self):
+        self.assertEqual(
+            self.cli(self.admin).get(f"/api/items/{self.item.pk}/").status_code, 200
+        )
+        self.assertEqual(
+            self.cli(self.admin).get(
+                f"/api/trainings/{self.training.pk}/"
+            ).status_code,
+            200,
+        )
+
+    def test_staff_register_on_archived_training_still_409_not_404(self):
+        # register/cancel/attendance must keep seeing archived rows so they
+        # return their own 409 — only `retrieve` is gated.
+        r = self.cli(self.staff).post(
+            f"/api/trainings/{self.training.pk}/register/"
+        )
+        self.assertEqual(r.status_code, 409)
+
+
+class Wave3MatrixBridgeWordingTests(TestCase):
+    """S2: the 'no linked Personnel' reason is path-neutral wording."""
+
+    def test_reason_is_path_neutral(self):
+        from .views import _matrix_bridge
+
+        t = _sched(
+            title="t", date_start=datetime.date(2026, 3, 1),
+            matrix_training_key="BLS",
+        )
+        updated, reason = _matrix_bridge(t, None)
+        self.assertFalse(updated)
+        self.assertEqual(reason, "the attendee has no linked Personnel record")
+        self.assertNotIn("user", reason)

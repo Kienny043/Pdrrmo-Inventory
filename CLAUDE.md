@@ -1005,18 +1005,48 @@ commit cycle.
   option filtering + the 400 guard reaching the client; F5 owner-sees-
   Withdraw / admin-doesn't / withdrawn-row-gone; F7 both History modals.
 
-### Wave 3 — UX polish  ·  planned
+### Wave 3 — UX polish  ·  **DONE**  (no migration, suite **223**)
 
-Registrations empty-state parity (U1); "Archived by" column on the
-Archived page (U2); drop Staff's dead "State" column (U4);
-permanent-delete confirm text names what's lost (D2, confirm-text
-version only); admin-only archived-record detail retrieve (S1);
-path-neutral `_matrix_bridge` "no linked Personnel" wording (S2).
+- **U1** — `TrainingsPage.jsx` RosterPanel: the "Registrations" section
+  now always renders the `<Table>` (headers + an in-body "No
+  registrations." row), matching the "Personnel roster" / "Manual
+  attendees" sections (was a bare `<p>`).
+- **U2** — `ArchivedPage.jsx`: an **"Archived by"** column
+  (`{h:'Archived by', f:'archived_by'}`) on all four tabs;
+  `archived_by` was already serialized as a username string.
+- **U4** — `StaffPage.jsx`: dropped the dead "State" column (always
+  "Active" — the list only returns active staff).
+- **D2** — permanent-delete confirms now name the cascade, per model:
+  `ArchivedPage.jsx` per-tab `deleteWarn` (Items → "…stock-movement and
+  holder-log history…", Trainings → "…registrations, attendance, and
+  roster…", Personnel → "…training-matrix records…", Staff → none, its
+  FKs `SET_NULL`); `TrainingsPage.jsx` archived-view Delete gets the
+  same note. (Confirm-text version only — not blocking the delete.)
+- **S1** — `ArchiveLifecycleMixin.get_queryset` +
+  `TrainingScheduleViewSet.get_queryset` exclude archived rows for the
+  `retrieve` action when the caller is not admin: `GET
+  /api/items/<archived>/` and `/api/trainings/<archived>/` → **404** for
+  STAFF (agrees with the list). `register` / `cancel-registration` /
+  `attendance` still see archived trainings so they return their own
+  409s — carve-out tested.
+- **S2** — `_matrix_bridge`: "the attending user has no linked
+  Personnel record" → "**the attendee** has no linked Personnel record"
+  (path-neutral; still contains "no linked Personnel" so the `assertIn`
+  checks hold; the one exact-match test updated).
+- **Tests (+6 → 223):** `Wave3ArchivedDetailRetrieveTests` (5),
+  `Wave3MatrixBridgeWordingTests` (1). U1/U2/U4/D2 frontend-only,
+  verified in an 18/18 real-browser run (`DEBUG=False` single-origin,
+  re-run 2×).
+
+**The three-wave logic / data-consistency audit response is complete** —
+it closed out the deeper audit that followed the R1–R7 React rebuild and
+the Post-R7 Personnel-roster feature. Suite **223** (192 + 11 Wave 1 +
+14 Wave 2 + 6 Wave 3).
 
 **Deferred, out of scope for all three waves:** F2 full production
 `/media/` serving (Step 10), F4 (`my-registrations` UI), F6 (admin
 removing a registration), blocking permanent-delete on audit-trail
-presence (D2's alternative fix — doing the confirm-text version instead).
+presence (D2's alternative fix — did the confirm-text version instead).
 
 ## Current Git State
 
@@ -1111,11 +1141,17 @@ conflict error + an "Account" column in the matrix (F1); self-service
 `DELETE /api/requests/<id>/withdraw/` + Withdraw button (F5); History
 access from the Archived page for Items and Trainings via a shared
 `ItemHistoryModal` and a new read-only `TrainingHistoryModal` (F7).
+**Wave 3** landed (no migration): Registrations empty-state parity (U1),
+"Archived by" column on all 4 Archived tabs (U2), dropped Staff's dead
+"State" column (U4), permanent-delete confirms now name the cascade per
+model (D2), archived-record `retrieve` gated to admins with the
+register/cancel/attendance carve-out preserved (S1), path-neutral
+matrix-bridge wording (S2). The three-wave audit response is complete.
 Migrations: `core/0001`–`core/0007` (`0006` = `PersonnelAttendee`;
-`0007` = active-registration unique constraint). Test suite: **217
-passing** (192 + 11 audit Wave 1 + 14 audit Wave 2; the React frontend
-has no test suite — it's covered by the R1–R7 + Post-R7 + audit-wave
-headless-Chromium runs). Remote `origin` is
+`0007` = active-registration unique constraint). Test suite: **223
+passing** (192 + 11 audit Wave 1 + 14 audit Wave 2 + 6 audit Wave 3; the
+React frontend has no test suite — it's covered by the R1–R7 + Post-R7 +
+audit-wave headless-Chromium runs). Remote `origin` is
 `https://github.com/Kienny043/Pdrrmo-Inventory.git`; `main` tracks
 `origin/main`.
 

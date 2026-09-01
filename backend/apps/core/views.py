@@ -311,6 +311,10 @@ class ArchiveLifecycleMixin:
             return qs.filter(is_archived=False)
         if self.action == "archived":
             return qs.filter(is_archived=True)
+        # S1: a non-admin's detail view agrees with their list view — an
+        # archived row's detail endpoint 404s for STAFF, not just the list.
+        if self.action == "retrieve" and not _is_admin(self.request.user):
+            return qs.filter(is_archived=False)
         return qs
 
     def update(self, request, *args, **kwargs):
@@ -662,7 +666,10 @@ def _matrix_bridge(training, personnel):
     if training.is_archived:
         return False, "the training is archived"
     if personnel is None:
-        return False, "the attending user has no linked Personnel record"
+        # path-neutral: this fires on the User-linked attendance path (no
+        # Personnel is linked to the account); on the Personnel-roster path
+        # ``personnel`` is a non-null FK, so it never reaches here.
+        return False, "the attendee has no linked Personnel record"
     if personnel.is_archived:
         return False, "the personnel record is archived"
     year = training.date_start.year
@@ -706,6 +713,12 @@ class TrainingScheduleViewSet(ArchiveLifecycleMixin, viewsets.ModelViewSet):
         qs = TrainingSchedule.objects.select_related("archived_by", "created_by")
         if self.action == "archived":
             return qs.filter(is_archived=True)
+        # S1: STAFF's detail view agrees with their list — an archived
+        # training's detail endpoint 404s for them. (register / cancel /
+        # attendance still see archived rows so they can return their own
+        # 409s.)
+        if self.action == "retrieve" and not _is_admin(self.request.user):
+            return qs.filter(is_archived=False)
         if self.action != "list":
             return qs
         archived = (self.request.query_params.get("archived") or "").lower()

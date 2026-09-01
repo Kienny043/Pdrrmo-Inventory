@@ -191,7 +191,6 @@ export default function StaffPage() {
               <Th>Department</Th>
               <Th>Contact</Th>
               <Th>Status</Th>
-              <Th>State</Th>
               <Th className="w-32" />
             </THead>
             <tbody>
@@ -211,7 +210,6 @@ export default function StaffPage() {
                   <Td variant="plain">
                     <Badge value={s.status} />
                   </Td>
-                  <Td variant="muted">{s.is_archived ? 'Archived' : 'Active'}</Td>
                   <Td variant="plain">
                     <div className="flex gap-3">
                       <TextAction tone="muted" onClick={() => openEdit(s)}>
